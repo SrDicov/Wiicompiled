@@ -232,10 +232,6 @@ inline void EnsureConfigFile() {
               "resolution_multiplier = 1.0\n"
               "frame_interpolation_fps = 0\n"
               "display_mode = \"windowed\"\n"
-              // "auto" itself is Wine-aware: see the backend resolution in
-              // main.cpp's RuntimeMain, which tries Vulkan first under Wine/
-              // Proton instead of D3D12 (whose Wine/vkd3d support is commonly
-              // incomplete) and leaves real Windows unaffected.
               "graphics_api = \"auto\"\n"
               "skip_unready_pipelines = true\n"
               "disable_copy_filter = true\n"

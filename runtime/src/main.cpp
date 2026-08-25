@@ -1089,13 +1089,13 @@ LONG CALLBACK SehLogger(EXCEPTION_POINTERS* info) {
         info->ExceptionRecord->ExceptionCode == kAsanFatalAppExit) { // ASan reporting - let it print first
         return EXCEPTION_CONTINUE_SEARCH;
     }
-    
+
     // Guard against re-entrancy: if we crash while reporting, don't recurse
     static std::atomic_flag s_inCrashHandler = ATOMIC_FLAG_INIT;
     if (s_inCrashHandler.test_and_set()) {
         std::_Exit(EXIT_FAILURE);
     }
-    
+
     // Report the structured exception with detailed information
     ReportStructuredException(info);
     const auto* record = info->ExceptionRecord;
@@ -1115,7 +1115,7 @@ LONG CALLBACK SehLogger(EXCEPTION_POINTERS* info) {
     DumpHostStackTrace();
 
     WriteFatalLogImpl("seh");
-    
+
     // CRITICAL: Explicitly flush all output to ensure visibility with PowerShell redirection
     std::cerr << '\n';
     RT_LOG(RT_TAG_RUNTIME) << "===== FLUSHING OUTPUT BEFORE EXIT =====" << std::endl;
@@ -1123,7 +1123,7 @@ LONG CALLBACK SehLogger(EXCEPTION_POINTERS* info) {
     std::cout.flush();
     std::fflush(stdout);
     std::fflush(stderr);
-    
+
     std::_Exit(EXIT_FAILURE);
 }
 
@@ -1257,7 +1257,7 @@ int RuntimeMain(int argc, char** argv) {
     // Install exit/terminate handlers to ensure we get crash info
     std::atexit(AtExitHandler);
     std::set_terminate(TerminateHandler);
-    
+
     std::string currentEntryLabel;
 
     try {
@@ -1335,13 +1335,8 @@ int RuntimeMain(int argc, char** argv) {
                 break;
             }
         }
-        // Wine's own D3D12 (vkd3d) is commonly incomplete (e.g. CreateSharedHandle
-        // is unimplemented), where Vulkan just works; Proton's vkd3d-proton is the
-        // exception, but explicitly configuring "d3d12" still opts back into it.
-        // Real Windows is unaffected: "auto" still tries D3D12 first there. This
-        // only steers what aurora tries first - requestedBackend (used below to
-        // decide whether to warn about a fallback) stays BACKEND_AUTO, since the
-        // user asked for "auto", not specifically Vulkan.
+        // Vulkan is preferred under Wine/Proton, but explicitly configuring "d3d12" still opts back into it,
+        // Windows is unaffected: "auto" still tries D3D12 first there
         auroraConfig.desiredBackend =
             (configuredBackend == BACKEND_AUTO && RuntimeHostPlatform::IsRunningUnderWine())
                 ? BACKEND_VULKAN
@@ -1379,10 +1374,10 @@ int RuntimeMain(int argc, char** argv) {
         InitializePersistentCpuContext();
         auto& cpu = GetPersistentCpuContext();
         SeedCpuContext(cpu);
-        
+
         // Initialize the fiber-based threading system
         Fiber::GuestFiberManager::Initialize();
-        
+
         CpuContextScope cpuScope(&cpu);
 
         std::string label = entry->name;
@@ -1397,7 +1392,7 @@ int RuntimeMain(int argc, char** argv) {
         InvokeIndirectCpu(entry->address, &cpu);
         const uint32_t result = cpu.gpr[3];
         RT_LOG(RT_TAG_RUNTIME) << label << " => 0x" << std::hex << result << std::dec << " (" << result << ")" << std::endl;
-        
+
         // Shutdown fiber system
         Fiber::GuestFiberManager::Shutdown();
         WindowPlacementPersistence::Flush(true);
