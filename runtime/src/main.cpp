@@ -108,6 +108,97 @@ void ConfigureWindowsFatalDialogBehavior() {
     _CrtSetReportHook(WindowsCrtReportHook);
 }
 
+using LoadLibraryExA_t = HMODULE(WINAPI*)(LPCSTR, HANDLE, DWORD);
+LoadLibraryExA_t g_realLoadLibraryExA = nullptr;
+
+// Wine's LoadLibraryExA rejects LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR with
+// ERROR_INVALID_PARAMETER whenever hFile is null, even though that flag is
+// documented as meaningless (and real Windows silently ignores it) outside of
+// a dependent-DLL load. Dawn's DynamicLib::Open always ORs it into the flags
+// it passes when opening "vulkan-1.dll", which otherwise loads fine under
+// Wine once that one bit is stripped. Patching webgpu_dawn.dll's own IAT
+// entry (rather than Dawn's source, which we don't build) keeps the fix
+// self-contained and a no-op on real Windows.
+HMODULE WINAPI HookedLoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, DWORD dwFlags) {
+    if (hFile == nullptr && lpLibFileName != nullptr &&
+        (dwFlags & LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR) != 0 &&
+        _stricmp(lpLibFileName, "vulkan-1.dll") == 0) {
+        dwFlags &= ~static_cast<DWORD>(LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR);
+    }
+    return g_realLoadLibraryExA(lpLibFileName, hFile, dwFlags);
+}
+
+bool ImportModuleNameMatchesKernel32(const char* moduleName) {
+    // Recent toolchains often record kernel32 imports against a virtual API
+    // Set forwarder (e.g. "api-ms-win-core-libraryloader-l1-*.dll") instead of
+    // the literal "kernel32.dll", so match both. The prefix length must be the
+    // literal's strlen (29), not 30: with 30, _strnicmp also compares the
+    // literal's NUL terminator against the real forwarder name's next byte
+    // (e.g. '-' in "...libraryloader-l1-2-0.dll"), which never matches, so the
+    // prefix check silently failed for every real forwarder-named import.
+    constexpr char kLibraryLoaderPrefix[] = "api-ms-win-core-libraryloader";
+    return _stricmp(moduleName, "kernel32.dll") == 0 ||
+           _strnicmp(moduleName, kLibraryLoaderPrefix, sizeof(kLibraryLoaderPrefix) - 1) == 0;
+}
+
+void PatchDawnVulkanLoaderForWine() {
+    const HMODULE dawnModule = ::GetModuleHandleA("webgpu_dawn.dll");
+    if (dawnModule == nullptr) {
+        RT_LOG(RT_TAG_RUNTIME) << "[runtime] webgpu_dawn.dll not loaded; skipping Wine Vulkan loader patch." << std::endl;
+        return;  // Statically-linked Dawn build; nothing to patch.
+    }
+    auto* base = reinterpret_cast<BYTE*>(dawnModule);
+    auto* dosHeader = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+    auto* ntHeaders = reinterpret_cast<IMAGE_NT_HEADERS64*>(base + dosHeader->e_lfanew);
+    const auto& importDirectory = ntHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (importDirectory.VirtualAddress == 0) {
+        RT_LOG(RT_TAG_RUNTIME) << "[runtime] webgpu_dawn.dll has no import directory; skipping Wine Vulkan loader patch." << std::endl;
+        return;
+    }
+
+    auto* importDescriptor = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + importDirectory.VirtualAddress);
+    for (; importDescriptor->Name != 0; ++importDescriptor) {
+        const char* moduleName = reinterpret_cast<const char*>(base + importDescriptor->Name);
+        if (importDescriptor->FirstThunk == 0 || !ImportModuleNameMatchesKernel32(moduleName)) {
+            continue;
+        }
+        // Some linkers omit the Import Name Table (OriginalFirstThunk) and only
+        // emit the IAT; fall back to walking FirstThunk for names in that case
+        // (it still holds unbound name-thunk data until the loader binds it,
+        // and we only read it here before ever writing to it).
+        const DWORD nameThunkRva =
+            importDescriptor->OriginalFirstThunk != 0 ? importDescriptor->OriginalFirstThunk : importDescriptor->FirstThunk;
+        auto* nameThunk = reinterpret_cast<IMAGE_THUNK_DATA64*>(base + nameThunkRva);
+        auto* addressThunk = reinterpret_cast<IMAGE_THUNK_DATA64*>(base + importDescriptor->FirstThunk);
+        int entryCount = 0;
+        for (; nameThunk->u1.AddressOfData != 0; ++nameThunk, ++addressThunk, ++entryCount) {
+            if (IMAGE_SNAP_BY_ORDINAL64(nameThunk->u1.Ordinal)) {
+                continue;
+            }
+            auto* importByName = reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(base + nameThunk->u1.AddressOfData);
+            if (std::strcmp(reinterpret_cast<const char*>(importByName->Name), "LoadLibraryExA") != 0) {
+                continue;
+            }
+            g_realLoadLibraryExA = reinterpret_cast<LoadLibraryExA_t>(addressThunk->u1.Function);
+            DWORD oldProtect = 0;
+            if (::VirtualProtect(&addressThunk->u1.Function, sizeof(void*), PAGE_READWRITE, &oldProtect)) {
+                addressThunk->u1.Function = reinterpret_cast<ULONGLONG>(&HookedLoadLibraryExA);
+                DWORD ignored = 0;
+                ::VirtualProtect(&addressThunk->u1.Function, sizeof(void*), oldProtect, &ignored);
+                RT_LOG(RT_TAG_RUNTIME) << "[runtime] Patched webgpu_dawn.dll's LoadLibraryExA import (module="
+                    << moduleName << ") to work around a Wine LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR bug." << std::endl;
+            } else {
+                RT_LOG(RT_TAG_RUNTIME) << "[runtime] Found LoadLibraryExA import but VirtualProtect failed, error="
+                    << ::GetLastError() << std::endl;
+            }
+            return;
+        }
+        RT_LOG(RT_TAG_RUNTIME) << "[runtime] Matched import module '" << moduleName << "' (" << entryCount
+            << " entries) but did not find LoadLibraryExA in it." << std::endl;
+    }
+    RT_LOG(RT_TAG_RUNTIME) << "[runtime] No kernel32-like import module found in webgpu_dawn.dll; Wine Vulkan loader patch not applied." << std::endl;
+}
+
 class WindowsTimerResolutionGuard {
 public:
     WindowsTimerResolutionGuard() {
@@ -1157,6 +1248,10 @@ int RuntimeMain(int argc, char** argv) {
     WindowsTimerResolutionGuard timerResolutionGuard;
 #endif
     InitializeProcessTranscript(argc, argv);
+#if defined(_WIN32)
+    // Must run after transcript init, or its diagnostics have no console.log to land in yet.
+    PatchDawnVulkanLoaderForWine();
+#endif
     std::signal(SIGABRT, AbortSignalHandler);
     // Install exit/terminate handlers to ensure we get crash info
     std::atexit(AtExitHandler);

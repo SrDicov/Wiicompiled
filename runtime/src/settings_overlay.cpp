@@ -1,6 +1,7 @@
 #include "settings_overlay.h"
 #include "audio_backend.h"
 #include "game_graphics_options.h"
+#include "host_platform.h"
 #include "music_attenuation.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
@@ -531,21 +532,25 @@ void DrawAudioSettings() {
             "Runs the AX/DSP voice mix off the game thread. Turn this off if you "
             "suspect an audio problem; the mix then runs inline as it used to.");
     }
-    ImGui::Separator();
-    if (ImGui::Checkbox("Mute game music while external media is playing",
-                        &g_attenuateMusicWhenMediaPlays)) {
-        MusicAttenuation::SetEnabled(g_attenuateMusicWhenMediaPlays);
-        RuntimeConfigFile::SetAttenuateMusicWhenMediaPlays(g_attenuateMusicWhenMediaPlays);
-    }
-    if (g_attenuateMusicWhenMediaPlays) {
-        if (MusicAttenuation::IsExternalMediaPlaying()) {
-            ImGui::TextDisabled("External media is playing; game music is muted.");
-        } else if (!MusicAttenuation::IsMediaControlInitializationComplete()) {
-            ImGui::TextDisabled("Waiting for Windows Media Control...");
-        } else if (!MusicAttenuation::IsMediaControlAvailable()) {
-            ImGui::TextDisabled("Windows Media Control is unavailable.");
-        } else {
-            ImGui::TextDisabled("No external media is currently playing.");
+    // Windows Media Control (winrt/Windows.Media.Control.h) wont do anything
+    // under Wine/Proton, so hide the toggle
+    if (!RuntimeHostPlatform::IsRunningUnderWine()) {
+        ImGui::Separator();
+        if (ImGui::Checkbox("Mute game music while external media is playing",
+                            &g_attenuateMusicWhenMediaPlays)) {
+            MusicAttenuation::SetEnabled(g_attenuateMusicWhenMediaPlays);
+            RuntimeConfigFile::SetAttenuateMusicWhenMediaPlays(g_attenuateMusicWhenMediaPlays);
+        }
+        if (g_attenuateMusicWhenMediaPlays) {
+            if (MusicAttenuation::IsExternalMediaPlaying()) {
+                ImGui::TextDisabled("External media is playing; game music is muted.");
+            } else if (!MusicAttenuation::IsMediaControlInitializationComplete()) {
+                ImGui::TextDisabled("Waiting for Windows Media Control...");
+            } else if (!MusicAttenuation::IsMediaControlAvailable()) {
+                ImGui::TextDisabled("Windows Media Control is unavailable.");
+            } else {
+                ImGui::TextDisabled("No external media is currently playing.");
+            }
         }
     }
 }
@@ -579,7 +584,11 @@ void DrawGraphicsSettings() {
         "Borderless fullscreen",
         "Exclusive fullscreen",
     };
-    if (ImGui::Combo("Display mode", &g_displayMode, kDisplayModes, static_cast<int>(std::size(kDisplayModes)))) {
+    // Exclusive fullscreen doesn't work that well under Wine/Proton
+    const int displayModeCount = RuntimeHostPlatform::IsRunningUnderWine()
+        ? static_cast<int>(std::size(kDisplayModes)) - 1
+        : static_cast<int>(std::size(kDisplayModes));
+    if (ImGui::Combo("Display mode", &g_displayMode, kDisplayModes, displayModeCount)) {
         const auto mode = static_cast<AuroraDisplayMode>(g_displayMode);
         aurora_set_display_mode(mode);
         const AuroraDisplayMode activeMode = aurora_get_display_mode();
@@ -639,6 +648,9 @@ void DrawGraphicsSettings() {
     }
     ImGui::Separator();
     ImGui::Text("Graphics API: %s", GraphicsApiDisplayName());
+    if (RuntimeHostPlatform::IsRunningUnderWine()) {
+        ImGui::Text("Running under Wine/Proton");
+    }
 }
 
 void DrawFpsOverlay() {
@@ -847,7 +859,7 @@ void InitializeRuntimeSettings() noexcept {
     MusicAttenuation::SetSoundEffectsVolume(static_cast<float>(g_soundEffectsVolumePercent) / 100.0f);
     MusicAttenuation::SetUiVolume(static_cast<float>(g_uiVolumePercent) / 100.0f);
     MusicAttenuation::SetVoicesVolume(static_cast<float>(g_voicesVolumePercent) / 100.0f);
-    MusicAttenuation::SetEnabled(g_attenuateMusicWhenMediaPlays);
+    MusicAttenuation::SetEnabled(g_attenuateMusicWhenMediaPlays && !RuntimeHostPlatform::IsRunningUnderWine());
     RuntimeGameGraphicsOptions::SetDisabledPostProcessingPaths(g_disabledPostProcessingPaths);
     const uint32_t targetFps = kFrameInterpolationTargetFps[static_cast<size_t>(g_frameInterpolationMode)];
     LimitResolutionForFrameRate();

@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 #include <toml.hpp>
+#include "host_platform.h"
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -130,6 +131,16 @@ inline bool IsSupportedDisplayMode(std::string_view value) {
         "windowed", "borderless", "exclusive",
     };
     return std::find(values.begin(), values.end(), value) != values.end();
+}
+
+// Remove Exclusive fullscreen on Wine/Proton
+inline std::string EffectiveDisplayMode(std::string value) {
+    if (value == "exclusive" && RuntimeHostPlatform::IsRunningUnderWine()) {
+        std::cerr << "[runtime] video.display_mode=\"exclusive\" is unreliable under Wine/Proton; "
+                     "using \"borderless\" instead" << std::endl;
+        return "borderless";
+    }
+    return value;
 }
 
 // 240 was offered by an early build and is no longer supported; a saved 240 is
@@ -347,7 +358,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     }
     if (auto value = FindConfigValue<std::string>(document, "video", "display_mode");
         value && IsSupportedDisplayMode(*value)) {
-        config.displayMode = *value;
+        config.displayMode = EffectiveDisplayMode(*value);
     }
     if (auto value = FindConfigUint(document, "video", "frame_interpolation_fps")) {
         const uint32_t migrated = *value == 240u ? 180u : *value;
@@ -552,6 +563,7 @@ inline bool SetDisplayMode(std::string value) {
     if (!IsSupportedDisplayMode(value)) {
         return false;
     }
+    value = EffectiveDisplayMode(std::move(value));
     Mutable().displayMode = value;
     return WriteSetting("video", "display_mode", FormatString(value));
 }
