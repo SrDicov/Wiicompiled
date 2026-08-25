@@ -49,6 +49,7 @@
 #include "aurora_events.h"
 #include "fiber_manager.h"
 #include "hle_stubs.h"
+#include "host_platform.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
 #include "runtime_product.h"
@@ -1327,13 +1328,25 @@ int RuntimeMain(int argc, char** argv) {
         };
 
         const std::string backend = RuntimeConfigFile::GraphicsApi("auto");
+        AuroraBackend configuredBackend = BACKEND_AUTO;
         for (const auto& entry : kGraphicsBackends) {
             if (backend == entry.configName) {
-                auroraConfig.desiredBackend = entry.backend;
+                configuredBackend = entry.backend;
                 break;
             }
         }
-        const AuroraBackend requestedBackend = auroraConfig.desiredBackend;
+        // Wine's own D3D12 (vkd3d) is commonly incomplete (e.g. CreateSharedHandle
+        // is unimplemented), where Vulkan just works; Proton's vkd3d-proton is the
+        // exception, but explicitly configuring "d3d12" still opts back into it.
+        // Real Windows is unaffected: "auto" still tries D3D12 first there. This
+        // only steers what aurora tries first - requestedBackend (used below to
+        // decide whether to warn about a fallback) stays BACKEND_AUTO, since the
+        // user asked for "auto", not specifically Vulkan.
+        auroraConfig.desiredBackend =
+            (configuredBackend == BACKEND_AUTO && RuntimeHostPlatform::IsRunningUnderWine())
+                ? BACKEND_VULKAN
+                : configuredBackend;
+        const AuroraBackend requestedBackend = configuredBackend;
 
         const AuroraInfo auroraInfo = aurora_initialize(0, nullptr, &auroraConfig);
         if (requestedBackend != BACKEND_AUTO && auroraInfo.backend != requestedBackend) {
