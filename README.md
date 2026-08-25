@@ -124,6 +124,22 @@ translator without any game data around.
 For everything beyond that, feeding in your own `main.dol`/`StaticR.rel`, running the
 translation, generating the manifest and build graph, and compiling. see [`translator/README.md`](translator/README.md).
 
+### Building on Linux
+
+`build.sh` at the repository's root completes the whole pipeline (fetching llvm-mingw and the [mingw-w64-cppwinrt](https://github.com/alvinhochun/mingw-w64-cppwinrt) headers, translating, and cross-compiling). 
+
+Pass `--retro` to also build Retro Rewind.
+
+No C/C++ compiler is needed on the host - `build.sh` fetches its own cross-compiler (llvm-mingw) and cross-compiles Windows binaries, so the only "compiler" dependency is the .NET SDK for the translator.
+
+Required packages on Arch, for example:
+
+```bash
+sudo pacman -S --needed dotnet-sdk-8.0 cmake ninja curl jq tar unzip wit
+```
+
+For other distros: `cmake`, `ninja` (often `ninja-build`), `curl`, `jq`, `unzip`, and `coreutils` are in every mainstream repo. .NET 8 SDK is usually `dotnet-sdk-8.0` on Fedora/openSUSE, but Debian/Ubuntu's default repos are often too old, look at Microsoft's own apt feed instead. `wit` (Wiimms ISO Tools, used to extract the disc image) can be found at [wit.wiimm.de](https://wit.wiimm.de) too.
+
 ## FAQ
 
 **Is this an emulator?**

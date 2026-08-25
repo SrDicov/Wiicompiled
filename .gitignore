@@ -58,6 +58,7 @@ project.lock.json
 /Launcher/dist/
 /Launcher/WiiCompiled-Setup.exe
 *.exe
+Mario Kart Wii*
 *.msi
 
 

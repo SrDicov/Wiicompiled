@@ -21,25 +21,80 @@ TRANSLATOR_DLL="translator/src/Translator.Cli/bin/Release/net8.0/Translator.Cli.
 # point RETRO_ROOT at an existing install elsewhere instead of moving it.
 RETRO="${RETRO:-0}"
 RETRO_SKIP_WFC="${RETRO_SKIP_WFC:-0}"
+# Pass --package (or PACKAGE=1) to also assemble a self-contained, movable
+# copy under dist/ (exe+DLLs+DATA, and RetroRewind6 too when --retro) and
+# zip it, useful for end users who want to understand what files to keep
+# around for a portable install.
+PACKAGE="${PACKAGE:-0}"
 for arg in "$@"; do
     case "$arg" in
         --retro) RETRO=1 ;;
         --retro-skip-wfc) RETRO=1; RETRO_SKIP_WFC=1 ;;
+        --package) PACKAGE=1 ;;
     esac
 done
 RETRO_ROOT="${RETRO_ROOT:-$(pwd)/PulsarPacks/completed/RetroRewind/RetroRewind6}"
 RETRO_OUT="build/mods/retro_rewind_full_cpp"
 
+EXPECTED_DOL_SHA256="80d18895b39c63bd80f457398bfcbb91b7d16ac116a41a88967e954080155b05"
+EXPECTED_REL_SHA256="16d9d146112541fefea701ecb5bc1a496f9d50e4a752fbb5b6778e7c6399f67d"
+
+verify_sha256() {
+    [ -f "$1" ] && [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$2" ]
+}
+
+have_assets() {
+    verify_sha256 "Assets/main.dol" "$EXPECTED_DOL_SHA256" && verify_sha256 "Assets/StaticR.rel" "$EXPECTED_REL_SHA256"
+}
+
+# Auto-extract main.dol/StaticR.rel from a local disc image if Assets/ doesn't
+# already hold a verified clean PAL RMCP01 copy. Accepts whatever `wit` does
+# (ISO, GCM, GCZ, CISO, WBFS, WIA, RVZ) sitting at the repo root; set
+# GAME_IMAGE to pick one explicitly (path or name) when more than one exists
+# or it lives elsewhere.
+if ! have_assets; then
+    if [ -z "${GAME_IMAGE:-}" ]; then
+        shopt -s nullglob nocaseglob
+        candidates=(*.wbfs *.iso *.gcm *.gcz *.ciso *.wia *.rvz)
+        shopt -u nullglob nocaseglob
+        if [ "${#candidates[@]}" -eq 1 ]; then
+            GAME_IMAGE="${candidates[0]}"
+        elif [ "${#candidates[@]}" -gt 1 ]; then
+            echo "error: multiple disc images found at the repo root; set GAME_IMAGE=path/to/image" >&2
+            printf '  - %s\n' "${candidates[@]}" >&2
+            exit 1
+        fi
+    fi
+
+    if [ -n "${GAME_IMAGE:-}" ] && command -v wit >/dev/null 2>&1; then
+        if ! verify_sha256 "extracted/DATA/sys/main.dol" "$EXPECTED_DOL_SHA256" ||
+           ! verify_sha256 "extracted/DATA/files/rel/StaticR.rel" "$EXPECTED_REL_SHA256"; then
+            echo "==> extracting $GAME_IMAGE (this only needs to happen once)"
+            rm -rf extracted
+            wit EXTRACT "$GAME_IMAGE" -D extracted
+        fi
+        if verify_sha256 "extracted/DATA/sys/main.dol" "$EXPECTED_DOL_SHA256" &&
+           verify_sha256 "extracted/DATA/files/rel/StaticR.rel" "$EXPECTED_REL_SHA256"; then
+            mkdir -p Assets
+            cp -f extracted/DATA/sys/main.dol Assets/main.dol
+            cp -f extracted/DATA/files/rel/StaticR.rel Assets/StaticR.rel
+        else
+            echo "error: $GAME_IMAGE did not produce a clean PAL RMCP01 main.dol/StaticR.rel (wrong region/revision?)" >&2
+        fi
+    fi
+fi
+
 # files that need to be dumped from PAL RMCP01 disc
-if [ ! -f "Assets/main.dol" ] || [ ! -f "Assets/StaticR.rel" ]; then
+if ! have_assets; then
     echo "error: missing game files under Assets/" >&2
-    [ -f "Assets/main.dol" ]     || echo "  - Assets/main.dol     (expected sha256 80d18895b39c63bd80f457398bfcbb91b7d16ac116a41a88967e954080155b05)" >&2
-    [ -f "Assets/StaticR.rel" ]  || echo "  - Assets/StaticR.rel  (expected sha256 16d9d146112541fefea701ecb5bc1a496f9d50e4a752fbb5b6778e7c6399f67d)" >&2
+    verify_sha256 "Assets/main.dol" "$EXPECTED_DOL_SHA256"     || echo "  - Assets/main.dol     (expected sha256 $EXPECTED_DOL_SHA256)" >&2
+    verify_sha256 "Assets/StaticR.rel" "$EXPECTED_REL_SHA256"  || echo "  - Assets/StaticR.rel  (expected sha256 $EXPECTED_REL_SHA256)" >&2
     echo "" >&2
-    echo "extract them from your own clean PAL RMCP01 disc image (ISO/WBFS/RVZ/...):" >&2
+    echo "place a clean PAL RMCP01 disc image (ISO/WBFS/RVZ/...) at the repo root and re-run" >&2
+    echo "(needs the 'wit' package - Wiimms ISO Tools), or extract it yourself:" >&2
     echo "  Dolphin: right-click the game -> Properties -> Filesystem -> Extract Entire Disc" >&2
-    echo "  or CLI:  wit EXTRACT your-game.iso ./extracted" >&2
-    echo "then copy sys/main.dol and files/rel/StaticR.rel from the extracted tree into Assets/" >&2
+    echo "  or CLI:  wit EXTRACT your-game.iso -D ./extracted" >&2
+    echo "then copy extracted/DATA/sys/main.dol and extracted/DATA/files/rel/StaticR.rel into Assets/" >&2
     echo "verify with: sha256sum Assets/main.dol Assets/StaticR.rel" >&2
     exit 1
 fi
@@ -209,7 +264,105 @@ cmake -S runtime -B "$BUILD_DIR" -G Ninja \
 
 cmake --build "$BUILD_DIR"
 
+# Portable config, pre-filled with the paths this build already knows about.
+# Only actually enabled (via portable.txt) for --package: without it, this
+# just stages a Config.toml for --package to read below, and the exe here in
+# $BUILD_DIR keeps using its normal (%LOCALAPPDATA%\WiiCompiled or Wine-prefix
+# equivalent) config location instead of $BUILD_DIR/UserData.
+mkdir -p "$BUILD_DIR/UserData"
+if [ "$PACKAGE" = "1" ]; then
+    touch "$BUILD_DIR/portable.txt"
+fi
+CONFIG_FILE="$BUILD_DIR/UserData/Config.toml"
+if [ ! -f "$CONFIG_FILE" ]; then
+    dvd_root_line='# dvd_root = "D:/MarioKartWii/DATA"'
+    if [ -d "extracted/DATA/sys" ] && [ -d "extracted/DATA/files" ]; then
+        dvd_root_line="dvd_root = \"$(realpath --relative-to="$BUILD_DIR/UserData" "extracted/DATA")\""
+    fi
+    cat > "$CONFIG_FILE" <<EOF_CONFIG
+# WiiCompiled user configuration (generated by build.sh; portable mode)
+# Set paths.dvd_root to an extracted Mario Kart Wii DATA directory.
+
+[video]
+widescreen = true
+resolution_multiplier = 1.0
+frame_interpolation_fps = 0
+display_mode = "windowed"
+graphics_api = "auto"
+skip_unready_pipelines = true
+disable_copy_filter = true
+show_fps = true
+texture_replacements = false
+texture_dumps = false
+
+[audio]
+volume = 1.0
+music_volume = 1.0
+sound_effects_volume = 1.0
+ui_volume = 1.0
+voices_volume = 1.0
+muted = false
+attenuate_music_when_media_plays = false
+mix_worker = true
+
+[network]
+enabled = true
+
+[paths]
+$dvd_root_line
+# nand_root = "D:/WiiNand"
+# retro_rewind_root = "D:/RetroRewind/RetroRewind6"
+# overlay_roots = ["D:/RetroRewind"]
+EOF_CONFIG
+    echo "==> wrote portable config: $CONFIG_FILE"
+fi
+
+if [ "$RETRO" = "1" ] && ! grep -q '^retro_rewind_root' "$CONFIG_FILE"; then
+    retro_root_value="$(realpath --relative-to="$BUILD_DIR/UserData" "$RETRO_ROOT")"
+    sed -i "/^\[paths\]/a retro_rewind_root = \"$retro_root_value\"" "$CONFIG_FILE"
+    echo "==> set retro_rewind_root in $CONFIG_FILE"
+fi
+
+if [ "$PACKAGE" = "1" ]; then
+    if [ ! -d "extracted/DATA/sys" ] || [ ! -d "extracted/DATA/files" ]; then
+        echo "error: --package needs extracted/DATA (place a disc image at the repo root and re-run)" >&2
+        exit 1
+    fi
+    PACKAGE_DIR="dist/WiiCompiled"
+    echo ""
+    echo "==> packaging a portable copy at $PACKAGE_DIR (copies $(du -sh extracted/DATA | cut -f1) of game data, this takes a while)"
+    rm -rf "$PACKAGE_DIR"
+    mkdir -p "$PACKAGE_DIR/UserData"
+    cp -f "$BUILD_DIR"/*.exe "$BUILD_DIR"/*.dll "$BUILD_DIR/dsp_coef.bin" "$BUILD_DIR/initial_pipeline_cache.db" "$PACKAGE_DIR/"
+    cp -r "$BUILD_DIR/wii_bootstrap" "$PACKAGE_DIR/wii_bootstrap"
+    touch "$PACKAGE_DIR/portable.txt"
+    cp -r "extracted/DATA" "$PACKAGE_DIR/DATA"
+
+    package_paths=('dvd_root = "../DATA"')
+    if [ "$RETRO" = "1" ]; then
+        echo "==> copying RetroRewind6 ($(du -sh "$RETRO_ROOT" | cut -f1))"
+        cp -r "$RETRO_ROOT" "$PACKAGE_DIR/RetroRewind6"
+        package_paths+=('retro_rewind_root = "../RetroRewind6"')
+    fi
+    sed "/^\[paths\]/,\$d" "$CONFIG_FILE" > "$PACKAGE_DIR/UserData/Config.toml"
+    { echo "[paths]"; printf '%s\n' "${package_paths[@]}"; } >> "$PACKAGE_DIR/UserData/Config.toml"
+
+    echo "==> zipping $PACKAGE_DIR"
+    rm -f "dist/WiiCompiled.zip"
+    (cd dist && zip -rq -1 "WiiCompiled.zip" "WiiCompiled")
+    rm -rf "$PACKAGE_DIR"
+    echo "==> packaged: dist/WiiCompiled.zip ($(du -sh dist/WiiCompiled.zip | cut -f1))"
+fi
+
 echo "Build complete! Find it at $BUILD_DIR/WiiCompiled.exe"
 if [ "$RETRO" = "1" ]; then
     echo "Retro Rewind build at $BUILD_DIR/RetroRewind.exe"
+fi
+
+if [ "$PACKAGE" != "1" ]; then
+    echo ""
+    echo "This exe will NOT work if moved on its own - it needs $BUILD_DIR/ (DLLs, wii_bootstrap/,"
+    echo "dsp_coef.bin, initial_pipeline_cache.db, UserData/Config.toml) and the game data/mod"
+    echo "folders Config.toml points at, all kept alongside it."
+    echo "Re-run with --package for a single self-contained, movable copy instead."
 fi
