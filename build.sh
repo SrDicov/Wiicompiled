@@ -49,9 +49,9 @@ have_assets() {
 
 # Auto-extract main.dol/StaticR.rel from a local disc image if Assets/ doesn't
 # already hold a verified clean PAL RMCP01 copy. Accepts whatever `wit` does
-# (ISO, GCM, GCZ, CISO, WBFS, WIA, RVZ) sitting at the repo root; set
+# (ISO, GCM, GCZ, CISO, WBFS, WIA, RVZ) sitting at the repo root, set
 # GAME_IMAGE to pick one explicitly (path or name) when more than one exists
-# or it lives elsewhere.
+# or it lives elsewhere
 if ! have_assets; then
     if [ -z "${GAME_IMAGE:-}" ]; then
         shopt -s nullglob nocaseglob
@@ -124,12 +124,10 @@ fi
 # runtime/src/music_attenuation.cpp uses C++/WinRT (winrt/Windows.Media.Control.h)
 # for the music-ducking feature. llvm-mingw doesn't ship the Windows SDK's
 # generated WinRT projection headers, so fetch the community mingw-w64-cppwinrt
-# project's prebuilt header set (github.com/alvinhochun/mingw-w64-cppwinrt).
+# project's prebuilt header set (github.com/alvinhochun/mingw-w64-cppwinrt)
 if [ ! -f "$CPPWINRT_DIR/winrt/base.h" ]; then
     echo "==> fetching mingw-w64-cppwinrt headers (not found at $CPPWINRT_DIR)"
-    # This project has no non-prerelease build, so GitHub's /releases/latest
-    # (which only ever resolves to a non-prerelease) 404s; take the newest
-    # entry from the full release list instead.
+    # take the newest entry from the full release list
     asset_url=$(curl -sL https://api.github.com/repos/alvinhochun/mingw-w64-cppwinrt/releases \
         | jq -r '[.[] | select(.assets[].name | test("-headers\\.tar\\.gz$"))][0].assets[].browser_download_url' \
         | grep -E '\-headers\.tar\.gz$' \
@@ -265,10 +263,10 @@ cmake -S runtime -B "$BUILD_DIR" -G Ninja \
 cmake --build "$BUILD_DIR"
 
 # Portable config, pre-filled with the paths this build already knows about.
-# Only actually enabled (via portable.txt) for --package: without it, this
+# Only enabled (via portable.txt) for --package, without it, this
 # just stages a Config.toml for --package to read below, and the exe here in
 # $BUILD_DIR keeps using its normal (%LOCALAPPDATA%\WiiCompiled or Wine-prefix
-# equivalent) config location instead of $BUILD_DIR/UserData.
+# equivalent) config location instead of $BUILD_DIR/UserData
 mkdir -p "$BUILD_DIR/UserData"
 if [ "$PACKAGE" = "1" ]; then
     touch "$BUILD_DIR/portable.txt"
@@ -330,7 +328,7 @@ if [ "$PACKAGE" = "1" ]; then
     fi
     PACKAGE_DIR="dist/WiiCompiled"
     echo ""
-    echo "==> packaging a portable copy at $PACKAGE_DIR (copies $(du -sh extracted/DATA | cut -f1) of game data, this takes a while)"
+    echo "==> packaging a portable copy at $PACKAGE_DIR (this could takes a while)"
     rm -rf "$PACKAGE_DIR"
     mkdir -p "$PACKAGE_DIR/UserData"
     cp -f "$BUILD_DIR"/*.exe "$BUILD_DIR"/*.dll "$BUILD_DIR/dsp_coef.bin" "$BUILD_DIR/initial_pipeline_cache.db" "$PACKAGE_DIR/"
