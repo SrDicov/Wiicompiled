@@ -108,6 +108,23 @@ fi
 PUL_SHA=""
 if [ "$RETRO" = "1" ]; then
     if [ ! -f "$RETRO_ROOT/Binaries/Code.pul" ]; then
+        echo "==> $RETRO_ROOT is missing Binaries/Code.pul; downloading Retro Rewind from update.rwfc.net"
+        tmp_archive="$(mktemp --suffix=.zip)"
+        tmp_extract="$(mktemp -d)"
+        curl -L -o "$tmp_archive" "https://update.rwfc.net/RetroRewind/zip/RetroRewind.zip"
+        unzip -q "$tmp_archive" "RetroRewind6/*" -d "$tmp_extract"
+        rm -f "$tmp_archive"
+        if [ ! -f "$tmp_extract/RetroRewind6/Binaries/Code.pul" ]; then
+            echo "error: downloaded Retro Rewind archive did not contain RetroRewind6/Binaries/Code.pul" >&2
+            rm -rf "$tmp_extract"
+            exit 1
+        fi
+        # Don't delete RETRO_ROOT if it already exists
+        mkdir -p "$RETRO_ROOT"
+        cp -rn "$tmp_extract/RetroRewind6/." "$RETRO_ROOT/"
+        rm -rf "$tmp_extract"
+    fi
+    if [ ! -f "$RETRO_ROOT/Binaries/Code.pul" ]; then
         echo "error: --retro needs a Retro Rewind install with Binaries/Code.pul" >&2
         echo "  place your RetroRewind6 folder at $RETRO_ROOT" >&2
         echo "  or point RETRO_ROOT at an existing one: RETRO_ROOT=/path/to/RetroRewind6 ./build.sh --retro" >&2
@@ -193,3 +210,6 @@ cmake -S runtime -B "$BUILD_DIR" -G Ninja \
 cmake --build "$BUILD_DIR"
 
 echo "Build complete! Find it at $BUILD_DIR/WiiCompiled.exe"
+if [ "$RETRO" = "1" ]; then
+    echo "Retro Rewind build at $BUILD_DIR/RetroRewind.exe"
+fi
