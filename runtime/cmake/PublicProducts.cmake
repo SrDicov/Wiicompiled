@@ -218,6 +218,18 @@ function(mkw_configure_product target)
             set(runtime_dll_path "${mkw_compiler_bin}/${runtime_dll}")
         endif()
         if(NOT EXISTS "${runtime_dll_path}")
+            # Stock llvm-mingw releases (as distributed on GitHub) keep the
+            # target's runtime DLLs under <root>/<target-triple>/bin/, a
+            # sibling of the host wrapper scripts' own bin/ rather than inside
+            # it, and clang's own file-name search only covers lib/ paths.
+            # The triple isn't reliably available as CMAKE_CXX_COMPILER_TARGET
+            # here, so recover it the same way llvm-mingw's own per-target
+            # wrapper scripts do: strip the trailing "-<tool>" off their name.
+            get_filename_component(mkw_compiler_name "${CMAKE_CXX_COMPILER}" NAME)
+            string(REGEX REPLACE "-[^-]+$" "" mkw_compiler_target "${mkw_compiler_name}")
+            set(runtime_dll_path "${mkw_compiler_bin}/../${mkw_compiler_target}/bin/${runtime_dll}")
+        endif()
+        if(NOT EXISTS "${runtime_dll_path}")
             message(FATAL_ERROR "llvm-mingw runtime DLL not found: ${runtime_dll}")
         endif()
         add_custom_command(TARGET ${target} POST_BUILD

@@ -25,8 +25,11 @@ Code.pul
 # Build output
 /build/
 /build-*/
+/native-build/
 /dist/
+/extracted/
 /out/
+/.toolchain/
 [Bb]in/
 [Oo]bj/
 *.o
@@ -62,10 +65,12 @@ project.lock.json
 /.vs/
 /.vscode/
 /.idea/
+/.zed/
 /tools/
 /TEMP/
 /tmp/
 /test_output/
 *.log
+.claude
+.clang-format
 output.txt
-
