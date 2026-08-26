@@ -1168,6 +1168,8 @@ void PosixMemoryFaultHandler(int sig, siginfo_t* info, void* ucontextVoid) {
         auto* uc = static_cast<ucontext_t*>(ucontextVoid);
         isWrite = (uc->uc_mcontext.gregs[REG_ERR] & 0x2) != 0;
     }
+    // aarch64 seam: read uc_mcontext.__esr instead - ESR_EL1 bit 6 (WNR) is the write flag,
+    // and si_code must distinguish SEGV_MAPERR/SEGV_ACCERR the same way.
 #endif
 
     // Guest-space faults are the flat memory interception mechanism (MMIO, deferred EFB reads,

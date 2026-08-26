@@ -7,7 +7,7 @@ endif()
 if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
    NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR
    NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64)$")
-    message(FATAL_ERROR "WiiCompiled requires 64-bit Clang targeting x86_64")
+    message(FATAL_ERROR "WiiCompiled requires 64-bit Clang targeting x86_64 (aarch64 is planned; the ISA layer's x86 seams are isolated but its NEON port does not exist yet)")
 endif()
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     message(FATAL_ERROR "WiiCompiled only supports Release builds")

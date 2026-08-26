@@ -9,13 +9,23 @@
 #include <cstdio>
 #include <cstdlib>
 
+#if defined(__x86_64__) || defined(_M_X64)
 #include <cpuid.h>
+#define MKW_BASELINE_X86 1
+#elif defined(__aarch64__) || defined(_M_ARM64)
+// aarch64 has no x86-64-v3 equivalent wired up yet (no -march baseline is set for it either).
+// The future ARM check belongs here, reading getauxval(AT_HWCAP) flags instead of CPUID.
+#define MKW_BASELINE_X86 0
+#else
+#error "Unsupported host architecture for the CPU baseline check"
+#endif
 #if defined(_WIN32)
 #include <windows.h>
 #else
 #include <unistd.h>
 #endif
 
+#if MKW_BASELINE_X86
 namespace {
 
 void HostCpuId(unsigned leaf, unsigned subleaf, unsigned regs[4]) {
@@ -199,12 +209,15 @@ void WriteStdErrEarly(const char* text) {
 }
 
 }  // namespace
+#endif  // MKW_BASELINE_X86
 
 extern "C" int MkwHostCpuBaselineInit() {
+#if MKW_BASELINE_X86
     TextBuffer missing;
     if (!CollectMissingBaselineFeatures(missing)) {
         ReportUnsupportedCpu(missing.data);
     }
+#endif
     return 0;
 }
 
