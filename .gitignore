@@ -27,7 +27,9 @@ Code.pul
 /build-*/
 /native-build/
 /dist/
+/extracted/
 /out/
+/.toolchain/
 [Bb]in/
 [Oo]bj/
 *.o
@@ -56,6 +58,7 @@ project.lock.json
 /Launcher/dist/
 /Launcher/WiiCompiled-Setup.exe
 *.exe
+Mario Kart Wii*
 *.msi
 
 
@@ -63,10 +66,12 @@ project.lock.json
 /.vs/
 /.vscode/
 /.idea/
+/.zed/
 /tools/
 /TEMP/
 /tmp/
 /test_output/
 *.log
+.claude
+.clang-format
 output.txt
-
