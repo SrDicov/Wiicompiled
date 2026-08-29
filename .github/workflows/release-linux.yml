@@ -61,9 +61,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install build deps
         run: |
-          apk add --no-cache clang clang-extra-tools cmake ninja bash git
+          apk add --no-cache clang clang-extra-tools cmake bash git python3 curl unzip \
+            musl-dev linux-headers gcc g++ binutils lld \
+            abseil-cpp-dev wayland-dev wayland vulkan-headers vulkan-loader-dev sdl3-dev gcompat \
+            libxkbcommon-dev libxcb-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+          curl -L https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-linux.zip -o /tmp/ninja.zip
+          unzip -o /tmp/ninja.zip -d /tmp && mv /tmp/ninja /usr/local/bin/ninja && chmod +x /usr/local/bin/ninja
           clang --version
           cmake --version
+          /usr/local/bin/ninja --version
           dotnet --version
       - name: Publish Linux setup (musl, framework-dependent)
         run: |
@@ -80,6 +86,34 @@ jobs:
           name: wii-compiled-setup-linux-musl
           path: wii-compiled-setup-linux-musl.tar.gz
           if-no-files-found: error
+
+  # Musl game build validation – proves the native toolchain compiles the
+  # full runtime + Dawn vendor on musl (needs no game Assets, just the runtime).
+  # This is the slow job (Dawn from source, ~15 min) – validates 100% musl compat.
+  runtime-smoke-musl:
+    name: Runtime smoke (musl, vendor Dawn)
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/dotnet/sdk:8.0-alpine
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: |
+          apk add --no-cache clang clang-extra-tools cmake bash git python3 curl unzip \
+            musl-dev linux-headers gcc g++ binutils lld \
+            abseil-cpp-dev wayland-dev wayland vulkan-headers vulkan-loader-dev sdl3-dev gcompat \
+            libxkbcommon-dev libxcb-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+          curl -L https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-linux.zip -o /tmp/ninja.zip
+          unzip -o /tmp/ninja.zip -d /tmp && mv /tmp/ninja /usr/local/bin/ninja && chmod +x /usr/local/bin/ninja
+          clang --version; cmake --version; /usr/local/bin/ninja --version
+      - name: Verify Dawn vendor configures on musl
+        run: |
+          cmake -S runtime -B /tmp/rt-smoke-musl -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_MAKE_PROGRAM=/usr/local/bin/ninja \
+            -DAURORA_DAWN_PROVIDER=vendor -DAURORA_DAWN_VERSION=v20260827.013930 2>&1 | tail -30
+          echo "Musl vendor CMake OK"
 
   # Full game build smoke (glibc) – translator + runtime compile without Assets
   # is not possible; this job only validates that the native CMake still

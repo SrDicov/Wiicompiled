@@ -358,8 +358,19 @@ elif [[ "$keep_native_build" -eq 1 ]]; then
 fi
 
 log_step configure-native "Configuring the native toolchain"
+# Musl vendor needs a valid google/dawn tag (encounter prebuilt tag doesn't exist in google/dawn)
+# Use a recent tag known to exist and be compatible
+MUSL_DAWN_VERSION="v20260827.013930"
 if [[ -n "$aurora_provider_override" ]]; then
     aurora_provider_arg=(-DAURORA_DAWN_PROVIDER="$aurora_provider_override")
+    # For musl vendor, override Dawn version to a valid google/dawn tag
+    # (encounter prebuilt tag v20260603.191052 doesn't exist in google/dawn)
+    if [[ "$aurora_provider_override" == "vendor" ]]; then
+        if ldd --version 2>&1 | grep -qi musl || grep -qi alpine /etc/os-release 2>/dev/null; then
+            aurora_provider_arg+=(-DAURORA_DAWN_VERSION="$MUSL_DAWN_VERSION")
+            echo "Musl/Alpine detected: using Dawn $MUSL_DAWN_VERSION for vendor build" >&2
+        fi
+    fi
 else
     aurora_provider_arg=()
 fi
