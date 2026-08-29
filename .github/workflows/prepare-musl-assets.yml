@@ -1,0 +1,27 @@
+name: Prepare MUSL Assets
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Assets
+        run: |
+          ls -lh Assets/main.dol Assets/StaticR.rel 2>&1 || echo "No Assets in repo (expected – they are gitignored)"
+      - name: Create placeholder artifact (no game data in repo)
+        run: |
+          mkdir -p /tmp/fake-assets
+          echo "Place your legally dumped Assets/main.dol and Assets/StaticR.rel here" > /tmp/fake-assets/README.txt
+          echo "This placeholder proves the artifact plumbing works without committing game data." >> /tmp/fake-assets/README.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: game-assets
+          path: /tmp/fake-assets/README.txt
+          retention-days: 1

@@ -1,0 +1,90 @@
+name: Build MUSL Game
+
+on:
+  workflow_dispatch:
+    inputs:
+      assets_artifact:
+        description: "Name of artifact containing Assets/main.dol + StaticR.rel (uploaded via 'Prepare MUSL Assets' workflow)"
+        required: false
+        default: "game-assets"
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-musl-game:
+    name: Build WiiCompiled (musl, vendor Dawn)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for Assets
+        id: check
+        run: |
+          if [ -f Assets/main.dol ] && [ -f Assets/StaticR.rel ]; then
+            echo "has_assets=true" >> "$GITHUB_OUTPUT"
+            ls -lh Assets/main.dol Assets/StaticR.rel
+            sha256sum Assets/main.dol Assets/StaticR.rel | head -2
+          else
+            echo "has_assets=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No Assets/main.dol+StaticR.rel found."
+          fi
+
+      - name: Try download Assets artifact
+        if: steps.check.outputs.has_assets == 'false'
+        uses: dawidd6/action-download-artifact@v3
+        continue-on-error: true
+        with:
+          name: ${{ inputs.assets_artifact }}
+          path: .
+          workflow: prepare-musl-assets.yml
+          workflow_conclusion: success
+          if_no_artifact_found: warn
+
+      - name: Re-check Assets
+        if: steps.check.outputs.has_assets == 'false'
+        id: recheck
+        run: |
+          if [ -f Assets/main.dol ] && [ -f Assets/StaticR.rel ]; then
+            echo "has_assets=true" >> "$GITHUB_OUTPUT"
+            ls -lh Assets/main.dol Assets/StaticR.rel
+          else
+            echo "has_assets=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fail if still no Assets
+        if: steps.check.outputs.has_assets == 'false' && steps.recheck.outputs.has_assets == 'false'
+        run: |
+          echo "::error::Cannot build game without Assets/main.dol + StaticR.rel"
+          echo "This workflow builds the full WiiCompiled binary from your legally dumped PAL RMCP01."
+          echo "Assets are gitignored for legal reasons. To build in CI:"
+          echo "  tar -czf /tmp/assets.tgz Assets/main.dol Assets/StaticR.rel"
+          echo "  gh workflow run \"Prepare MUSL Assets\" --ref main  # uploads artifact"
+          echo "  gh workflow run \"Build MUSL Game\" --ref main       # then builds"
+          exit 1
+
+      - name: Setup .NET
+        if: steps.check.outputs.has_assets == 'true' || steps.recheck.outputs.has_assets == 'true'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Build WiiCompiled (musl, vendor Dawn)
+        if: steps.check.outputs.has_assets == 'true' || steps.recheck.outputs.has_assets == 'true'
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src mcr.microsoft.com/dotnet/sdk:8.0-alpine sh -c '
+            set -e
+            apk add --no-cache clang clang-extra-tools cmake bash git python3 curl unzip \
+              musl-dev linux-headers gcc g++ binutils lld \
+              abseil-cpp-dev wayland-dev wayland vulkan-headers vulkan-loader-dev sdl3-dev gcompat \
+              libxkbcommon-dev libxcb-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+            curl -L https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-linux.zip -o /tmp/ninja.zip
+            unzip -o /tmp/ninja.zip -d /tmp && mv /tmp/ninja /usr/local/bin/ninja && chmod +x /usr/local/bin/ninja
+            export PATH=/usr/local/bin:$PATH
+            rm -rf native-build-musl native-build-musl-out
+            Launcher/local-build.sh --output-dir "$PWD/native-build-musl-out" --build-dir "$PWD/native-build-musl" --profile base --aurora-provider vendor
+            ls -lh native-build-musl/WiiCompiled native-build-musl-out/WiiCompiled
+            /usr/local/bin/ninja --version
+          '
