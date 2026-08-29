@@ -1,0 +1,29 @@
+name: Upload MUSL Assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      assets_tarball:
+        description: "Base64 encoded tar.gz of Assets/main.dol + StaticR.rel"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decode and extract assets
+        run: |
+          echo "${{ inputs.assets_tarball }}" | base64 -d | tar -xz -C .
+          ls -lh Assets/main.dol Assets/StaticR.rel
+      - uses: actions/upload-artifact@v4
+        with:
+          name: game-assets
+          path: |
+            Assets/main.dol
+            Assets/StaticR.rel
+          retention-days: 1
