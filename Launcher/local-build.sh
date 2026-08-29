@@ -82,6 +82,8 @@ Usage: local-build.sh --output-dir DIR [options]
   --dotnet PATH                   dotnet executable (default: on PATH)
   --translator-dll PATH           Pre-built Translator.Cli.dll (skips building the translator; still needs --dotnet to run it)
   --translator-bin PATH           Self-contained Translator.Cli executable (skips building AND needs no dotnet at all)
+  --aurora-provider {auto,package,vendor,system}  Dawn provider override (default: auto; use vendor for musl)
+  --build-dir DIR                 Native build directory (default: native-build)
 EOF
 }
 
@@ -104,6 +106,8 @@ while [[ $# -gt 0 ]]; do
         --dotnet) dotnet_override=$2; shift 2 ;;
         --translator-dll) translator_dll_override=$2; shift 2 ;;
         --translator-bin) translator_bin_override=$2; shift 2 ;;
+        --aurora-provider) aurora_provider_override=$2; shift 2 ;;
+        --build-dir) build_override=$2; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) fail "unknown argument: $1" ;;
     esac
@@ -148,6 +152,7 @@ cmake_bin=${cmake_override:-cmake}
 ninja_bin=${ninja_override:-ninja}
 cc_bin=${cc_override:-clang}
 cxx_bin=${cxx_override:-clang++}
+aurora_provider_override=${aurora_provider_override:-}
 
 # A self-contained --translator-bin needs no dotnet at all (it bundles its own runtime); dotnet is
 # only required when the translator has to be built from source or run as a plain .dll.
@@ -167,7 +172,7 @@ base_metadata=$generated/base_translation_output.json
 base_manifest_dir=$workspace/build/base
 base_manifest=$base_manifest_dir/mkwii_base_manifest.json
 shards=$generated/build_shards
-build=$workspace/native-build
+build=${build_override:-$workspace/native-build}
 translation_provenance=$generated/translation-provenance.json
 toolchain_provenance=$build/toolchain-provenance.json
 retro_root=${retro_rewind_package_dir:-$workspace/PulsarPacks/completed/RetroRewind/RetroRewind6}
@@ -353,11 +358,17 @@ elif [[ "$keep_native_build" -eq 1 ]]; then
 fi
 
 log_step configure-native "Configuring the native toolchain"
+if [[ -n "$aurora_provider_override" ]]; then
+    aurora_provider_arg=(-DAURORA_DAWN_PROVIDER="$aurora_provider_override")
+else
+    aurora_provider_arg=()
+fi
 "$cmake_bin" -S "$workspace/runtime" -B "$build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_C_COMPILER="$cc_bin" -DCMAKE_CXX_COMPILER="$cxx_bin" \
     -DCMAKE_MAKE_PROGRAM="$ninja_bin" \
-    -DMKW_TRANSLATED_COMPILE_JOBS="$translated_jobs"
+    -DMKW_TRANSLATED_COMPILE_JOBS="$translated_jobs" \
+    "${aurora_provider_arg[@]}"
 
 case "$profile" in
     base) targets=(WiiCompiled) ;;
