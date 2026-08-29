@@ -17,12 +17,16 @@
 #include <utility>
 #include <vector>
 #include <toml.hpp>
+#include "host_platform.h"
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
 #include <shlobj.h>
+#else
+#include <cstdlib>
+#include <unistd.h>
 #endif
 
 struct RuntimeUserConfig {
@@ -132,6 +136,16 @@ inline bool IsSupportedDisplayMode(std::string_view value) {
     return std::find(values.begin(), values.end(), value) != values.end();
 }
 
+// Remove Exclusive fullscreen on Wine/Proton
+inline std::string EffectiveDisplayMode(std::string value) {
+    if (value == "exclusive" && RuntimeHostPlatform::IsRunningUnderWine()) {
+        std::cerr << "[runtime] video.display_mode=\"exclusive\" is unreliable under Wine/Proton; "
+                     "using \"borderless\" instead" << std::endl;
+        return "borderless";
+    }
+    return value;
+}
+
 // 240 was offered by an early build and is no longer supported; a saved 240 is
 // migrated to 180 at the parse site.
 inline bool IsSupportedFrameInterpolationFps(uint32_t value) {
@@ -153,7 +167,22 @@ inline std::optional<std::filesystem::path> ExecutableDirectory() {
         buffer.resize(buffer.size() * 2);
     }
 #else
-    return std::nullopt;
+    // /proc/self/exe is a Linux-specific magic symlink to the running executable; readlink()
+    // does not NUL-terminate and silently truncates if the buffer is too small, so this grows
+    // the buffer until the result no longer fills it completely, the same doubling strategy as
+    // the Windows branch above uses for GetModuleFileNameW.
+    std::string buffer(256, '\0');
+    for (;;) {
+        const ssize_t length = readlink("/proc/self/exe", buffer.data(), buffer.size());
+        if (length < 0) {
+            return std::nullopt;
+        }
+        if (static_cast<size_t>(length) < buffer.size()) {
+            buffer.resize(static_cast<size_t>(length));
+            return std::filesystem::path(buffer).parent_path();
+        }
+        buffer.resize(buffer.size() * 2);
+    }
 #endif
 }
 
@@ -193,6 +222,15 @@ inline std::filesystem::path ApplicationDataDirectory() {
         const std::filesystem::path directory = std::filesystem::path(rawPath) / kApplicationDirectoryName;
         CoTaskMemFree(rawPath);
         return directory;
+    }
+#else
+    // XDG Base Directory spec equivalent of FOLDERID_LocalAppData: $XDG_DATA_HOME if set and
+    // non-empty, otherwise its default of $HOME/.local/share.
+    if (const char* xdgDataHome = std::getenv("XDG_DATA_HOME"); xdgDataHome && *xdgDataHome) {
+        return std::filesystem::path(xdgDataHome) / kApplicationDirectoryName;
+    }
+    if (const char* home = std::getenv("HOME"); home && *home) {
+        return std::filesystem::path(home) / ".local" / "share" / kApplicationDirectoryName;
     }
 #endif
     return std::filesystem::current_path() / kApplicationDirectoryName;
@@ -347,7 +385,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     }
     if (auto value = FindConfigValue<std::string>(document, "video", "display_mode");
         value && IsSupportedDisplayMode(*value)) {
-        config.displayMode = *value;
+        config.displayMode = EffectiveDisplayMode(*value);
     }
     if (auto value = FindConfigUint(document, "video", "frame_interpolation_fps")) {
         const uint32_t migrated = *value == 240u ? 180u : *value;
@@ -552,6 +590,7 @@ inline bool SetDisplayMode(std::string value) {
     if (!IsSupportedDisplayMode(value)) {
         return false;
     }
+    value = EffectiveDisplayMode(std::move(value));
     Mutable().displayMode = value;
     return WriteSetting("video", "display_mode", FormatString(value));
 }

@@ -206,7 +206,11 @@ elseif (_aurora_dawn_provider STREQUAL "package")
   )
     if (EXISTS "${_cmake_path}/DawnConfig.cmake")
       set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
-      find_package(Dawn REQUIRED CONFIG PATHS "${_cmake_path}" NO_DEFAULT_PATH)
+      # NO_CMAKE_FIND_ROOT_PATH: this is already a fully resolved, self-contained
+      # path into the downloaded package (not a host system location), so it
+      # must not be re-rooted under CMAKE_FIND_ROOT_PATH when cross-compiling
+      # (that would look for it nested inside the sysroot and never find it).
+      find_package(Dawn REQUIRED CONFIG PATHS "${_cmake_path}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
       set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL OFF)
       set(_dawn_cmake_found TRUE)
       break()

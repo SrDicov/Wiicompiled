@@ -9,9 +9,23 @@
 #include <cstdio>
 #include <cstdlib>
 
+#if defined(__x86_64__) || defined(_M_X64)
 #include <cpuid.h>
+#define MKW_BASELINE_X86 1
+#elif defined(__aarch64__) || defined(_M_ARM64)
+// aarch64 has no x86-64-v3 equivalent wired up yet (no -march baseline is set for it either).
+// The future ARM check belongs here, reading getauxval(AT_HWCAP) flags instead of CPUID.
+#define MKW_BASELINE_X86 0
+#else
+#error "Unsupported host architecture for the CPU baseline check"
+#endif
+#if defined(_WIN32)
 #include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
+#if MKW_BASELINE_X86
 namespace {
 
 void HostCpuId(unsigned leaf, unsigned subleaf, unsigned regs[4]) {
@@ -137,7 +151,12 @@ bool CollectMissingBaselineFeatures(TextBuffer& missing) {
 // up yet, and fprintf(stderr, ...) faults there. Verified on this toolchain:
 // WriteFile on the raw standard-error handle and MessageBoxA both work, printf
 // does not. Anything added to this reporting path has to respect that.
+//
+// The POSIX path runs from an __attribute__((constructor)) instead, ahead of libc's own startup
+// guarantees; ::write() on the raw fd is the same kind of allocation-free, libc-init-independent
+// primitive as WriteFile is on Windows, so the same restriction is honored here.
 void WriteStdErrEarly(const char* text) {
+#if defined(_WIN32)
     const HANDLE handle = ::GetStdHandle(STD_ERROR_HANDLE);
     if (handle == nullptr || handle == INVALID_HANDLE_VALUE) {
         return;
@@ -148,6 +167,13 @@ void WriteStdErrEarly(const char* text) {
     }
     DWORD written = 0;
     ::WriteFile(handle, text, static_cast<DWORD>(length), &written, nullptr);
+#else
+    size_t length = 0;
+    while (text[length] != '\0') {
+        ++length;
+    }
+    (void)::write(STDERR_FILENO, text, length);
+#endif
 }
 
 [[noreturn]] void ReportUnsupportedCpu(const char* missing) {
@@ -168,21 +194,30 @@ void WriteStdErrEarly(const char* text) {
     WriteStdErrEarly(message.data);
     WriteStdErrEarly("\n");
 
+#if defined(_WIN32)
     ::MessageBoxA(nullptr, message.data, "WiiCompiled - Unsupported Processor",
                   MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TASKMODAL);
     // Leave through the OS rather than exit(): the C++ dynamic initializers
     // have not run yet, so there is no constructed program state to unwind and
     // the teardown path itself lives in AVX2 translation units.
     ::ExitProcess(1u);
+#else
+    // Same reasoning as the Windows path above: no C++ dynamic initializer has run yet, so
+    // _exit() (skips atexit/global destructors, unlike exit()) is the correct way out.
+    ::_exit(1);
+#endif
 }
 
 }  // namespace
+#endif  // MKW_BASELINE_X86
 
 extern "C" int MkwHostCpuBaselineInit() {
+#if MKW_BASELINE_X86
     TextBuffer missing;
     if (!CollectMissingBaselineFeatures(missing)) {
         ReportUnsupportedCpu(missing.data);
     }
+#endif
     return 0;
 }
 

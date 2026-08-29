@@ -37,6 +37,8 @@
 #include <mmsystem.h>
 #include <dbghelp.h>
 #else
+#include <signal.h>
+#include <ucontext.h>
 #include <unistd.h>
 #endif
 
@@ -49,6 +51,7 @@
 #include "aurora_events.h"
 #include "fiber_manager.h"
 #include "hle_stubs.h"
+#include "host_platform.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
 #include "runtime_product.h"
@@ -106,6 +109,97 @@ void ConfigureWindowsFatalDialogBehavior() {
     _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
     _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
     _CrtSetReportHook(WindowsCrtReportHook);
+}
+
+using LoadLibraryExA_t = HMODULE(WINAPI*)(LPCSTR, HANDLE, DWORD);
+LoadLibraryExA_t g_realLoadLibraryExA = nullptr;
+
+// Wine's LoadLibraryExA rejects LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR with
+// ERROR_INVALID_PARAMETER whenever hFile is null, even though that flag is
+// documented as meaningless (and real Windows silently ignores it) outside of
+// a dependent-DLL load. Dawn's DynamicLib::Open always ORs it into the flags
+// it passes when opening "vulkan-1.dll", which otherwise loads fine under
+// Wine once that one bit is stripped. Patching webgpu_dawn.dll's own IAT
+// entry (rather than Dawn's source, which we don't build) keeps the fix
+// self-contained and a no-op on real Windows.
+HMODULE WINAPI HookedLoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, DWORD dwFlags) {
+    if (hFile == nullptr && lpLibFileName != nullptr &&
+        (dwFlags & LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR) != 0 &&
+        _stricmp(lpLibFileName, "vulkan-1.dll") == 0) {
+        dwFlags &= ~static_cast<DWORD>(LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR);
+    }
+    return g_realLoadLibraryExA(lpLibFileName, hFile, dwFlags);
+}
+
+bool ImportModuleNameMatchesKernel32(const char* moduleName) {
+    // Recent toolchains often record kernel32 imports against a virtual API
+    // Set forwarder (e.g. "api-ms-win-core-libraryloader-l1-*.dll") instead of
+    // the literal "kernel32.dll", so match both. The prefix length must be the
+    // literal's strlen (29), not 30: with 30, _strnicmp also compares the
+    // literal's NUL terminator against the real forwarder name's next byte
+    // (e.g. '-' in "...libraryloader-l1-2-0.dll"), which never matches, so the
+    // prefix check silently failed for every real forwarder-named import.
+    constexpr char kLibraryLoaderPrefix[] = "api-ms-win-core-libraryloader";
+    return _stricmp(moduleName, "kernel32.dll") == 0 ||
+           _strnicmp(moduleName, kLibraryLoaderPrefix, sizeof(kLibraryLoaderPrefix) - 1) == 0;
+}
+
+void PatchDawnVulkanLoaderForWine() {
+    const HMODULE dawnModule = ::GetModuleHandleA("webgpu_dawn.dll");
+    if (dawnModule == nullptr) {
+        RT_LOG(RT_TAG_RUNTIME) << "[runtime] webgpu_dawn.dll not loaded; skipping Wine Vulkan loader patch." << std::endl;
+        return;  // Statically-linked Dawn build; nothing to patch.
+    }
+    auto* base = reinterpret_cast<BYTE*>(dawnModule);
+    auto* dosHeader = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+    auto* ntHeaders = reinterpret_cast<IMAGE_NT_HEADERS64*>(base + dosHeader->e_lfanew);
+    const auto& importDirectory = ntHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (importDirectory.VirtualAddress == 0) {
+        RT_LOG(RT_TAG_RUNTIME) << "[runtime] webgpu_dawn.dll has no import directory; skipping Wine Vulkan loader patch." << std::endl;
+        return;
+    }
+
+    auto* importDescriptor = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + importDirectory.VirtualAddress);
+    for (; importDescriptor->Name != 0; ++importDescriptor) {
+        const char* moduleName = reinterpret_cast<const char*>(base + importDescriptor->Name);
+        if (importDescriptor->FirstThunk == 0 || !ImportModuleNameMatchesKernel32(moduleName)) {
+            continue;
+        }
+        // Some linkers omit the Import Name Table (OriginalFirstThunk) and only
+        // emit the IAT; fall back to walking FirstThunk for names in that case
+        // (it still holds unbound name-thunk data until the loader binds it,
+        // and we only read it here before ever writing to it).
+        const DWORD nameThunkRva =
+            importDescriptor->OriginalFirstThunk != 0 ? importDescriptor->OriginalFirstThunk : importDescriptor->FirstThunk;
+        auto* nameThunk = reinterpret_cast<IMAGE_THUNK_DATA64*>(base + nameThunkRva);
+        auto* addressThunk = reinterpret_cast<IMAGE_THUNK_DATA64*>(base + importDescriptor->FirstThunk);
+        int entryCount = 0;
+        for (; nameThunk->u1.AddressOfData != 0; ++nameThunk, ++addressThunk, ++entryCount) {
+            if (IMAGE_SNAP_BY_ORDINAL64(nameThunk->u1.Ordinal)) {
+                continue;
+            }
+            auto* importByName = reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(base + nameThunk->u1.AddressOfData);
+            if (std::strcmp(reinterpret_cast<const char*>(importByName->Name), "LoadLibraryExA") != 0) {
+                continue;
+            }
+            g_realLoadLibraryExA = reinterpret_cast<LoadLibraryExA_t>(addressThunk->u1.Function);
+            DWORD oldProtect = 0;
+            if (::VirtualProtect(&addressThunk->u1.Function, sizeof(void*), PAGE_READWRITE, &oldProtect)) {
+                addressThunk->u1.Function = reinterpret_cast<ULONGLONG>(&HookedLoadLibraryExA);
+                DWORD ignored = 0;
+                ::VirtualProtect(&addressThunk->u1.Function, sizeof(void*), oldProtect, &ignored);
+                RT_LOG(RT_TAG_RUNTIME) << "[runtime] Patched webgpu_dawn.dll's LoadLibraryExA import (module="
+                    << moduleName << ") to work around a Wine LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR bug." << std::endl;
+            } else {
+                RT_LOG(RT_TAG_RUNTIME) << "[runtime] Found LoadLibraryExA import but VirtualProtect failed, error="
+                    << ::GetLastError() << std::endl;
+            }
+            return;
+        }
+        RT_LOG(RT_TAG_RUNTIME) << "[runtime] Matched import module '" << moduleName << "' (" << entryCount
+            << " entries) but did not find LoadLibraryExA in it." << std::endl;
+    }
+    RT_LOG(RT_TAG_RUNTIME) << "[runtime] No kernel32-like import module found in webgpu_dawn.dll; Wine Vulkan loader patch not applied." << std::endl;
 }
 
 class WindowsTimerResolutionGuard {
@@ -969,7 +1063,10 @@ LONG CALLBACK SehLogger(EXCEPTION_POINTERS* info) {
     // flat module registers its own handler first, but registration order is
     // not guaranteed once another VEH is installed later, so consult it here
     // too - resolving a fault twice is a no-op.
-    if (GuestFlat::HandleAccessViolation(info)) {
+    if (info->ExceptionRecord != nullptr && info->ExceptionRecord->NumberParameters >= 2 &&
+        GuestFlat::HandleAccessViolation(
+            reinterpret_cast<void*>(info->ExceptionRecord->ExceptionInformation[1]),
+            info->ExceptionRecord->ExceptionInformation[0] != 0)) {
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     if (g_suppressSehReporting && g_sehJumpTarget) {
@@ -997,13 +1094,13 @@ LONG CALLBACK SehLogger(EXCEPTION_POINTERS* info) {
         info->ExceptionRecord->ExceptionCode == kAsanFatalAppExit) { // ASan reporting - let it print first
         return EXCEPTION_CONTINUE_SEARCH;
     }
-    
+
     // Guard against re-entrancy: if we crash while reporting, don't recurse
     static std::atomic_flag s_inCrashHandler = ATOMIC_FLAG_INIT;
     if (s_inCrashHandler.test_and_set()) {
         std::_Exit(EXIT_FAILURE);
     }
-    
+
     // Report the structured exception with detailed information
     ReportStructuredException(info);
     const auto* record = info->ExceptionRecord;
@@ -1023,7 +1120,7 @@ LONG CALLBACK SehLogger(EXCEPTION_POINTERS* info) {
     DumpHostStackTrace();
 
     WriteFatalLogImpl("seh");
-    
+
     // CRITICAL: Explicitly flush all output to ensure visibility with PowerShell redirection
     std::cerr << '\n';
     RT_LOG(RT_TAG_RUNTIME) << "===== FLUSHING OUTPUT BEFORE EXIT =====" << std::endl;
@@ -1031,7 +1128,7 @@ LONG CALLBACK SehLogger(EXCEPTION_POINTERS* info) {
     std::cout.flush();
     std::fflush(stdout);
     std::fflush(stderr);
-    
+
     std::_Exit(EXIT_FAILURE);
 }
 
@@ -1039,6 +1136,104 @@ void InstallSehLogger() {
     if (!g_vectoredSehHandle) {
         g_vectoredSehHandle = AddVectoredExceptionHandler(1, SehLogger);
     }
+}
+#else
+// POSIX counterpart to SehLogger above. Unlike Windows' AddVectoredExceptionHandler, which lets
+// GuestFlat and this module each install their own handler and defensively re-check each other,
+// sigaction only allows one handler per signal - the second registration replaces the first
+// instead of chaining. So this is the single SIGSEGV/SIGBUS handler for the whole process, and it
+// owns checking GuestFlat's fault-interception logic first, exactly mirroring the order SehLogger
+// already uses on Windows.
+void ReportUnhandledSignalFault(int sig, void* faultAddress) {
+    RT_LOG(RT_TAG_RUNTIME) << "Signal " << sig << " (fault address 0x" << std::hex
+              << reinterpret_cast<uintptr_t>(faultAddress) << std::dec << ")";
+    if (!g_lastEntryLabel.empty()) {
+        std::cerr << " while executing " << g_lastEntryLabel;
+    }
+    std::cerr << std::endl;
+    if (const CpuContext* cpu = TryGetCpuContext()) {
+        RT_LOG(RT_TAG_RUNTIME) << "===== DUMPING CPU STATE =====" << std::endl;
+        SystemBridge::DumpCpuState(cpu);
+    }
+    std::cerr.flush();
+}
+
+void PosixMemoryFaultHandler(int sig, siginfo_t* info, void* ucontextVoid) {
+    void* faultAddress = info != nullptr ? info->si_addr : nullptr;
+    bool isWrite = false;
+#if defined(__x86_64__)
+    // Standard glibc technique for a POSIX fastmem-style handler: bit 1 (0x2) of the hardware
+    // error code x86 pushes on a page fault records whether it was a write.
+    if (ucontextVoid != nullptr) {
+        auto* uc = static_cast<ucontext_t*>(ucontextVoid);
+        isWrite = (uc->uc_mcontext.gregs[REG_ERR] & 0x2) != 0;
+    }
+    // aarch64 seam: read uc_mcontext.__esr instead - ESR_EL1 bit 6 (WNR) is the write flag,
+    // and si_code must distinguish SEGV_MAPERR/SEGV_ACCERR the same way.
+#endif
+
+    // Guest-space faults are the flat memory interception mechanism (MMIO, deferred EFB reads,
+    // the executable-write guard, unmapped pages). Resolving one here means resuming the
+    // faulting instruction, which just returning from the handler does.
+    if (faultAddress != nullptr && GuestFlat::HandleAccessViolation(faultAddress, isWrite)) {
+        return;
+    }
+
+    if (g_suppressSehReporting && g_sehJumpTarget) {
+        g_sehLastExceptionCode = static_cast<uint32_t>(sig);
+        g_sehLastExceptionAddress = reinterpret_cast<uintptr_t>(faultAddress);
+        g_sehLastAccessType = isWrite ? 1u : 0u;
+        g_sehLastAccessedAddress = reinterpret_cast<uintptr_t>(faultAddress);
+        siglongjmp(*g_sehJumpTarget, 1);
+    }
+    if (g_suppressSehReporting) {
+        // Reporting suppressed but nobody armed a recovery jump: restore the default disposition
+        // and re-raise so the process still terminates, instead of returning into the same fault.
+        signal(sig, SIG_DFL);
+        raise(sig);
+        return;
+    }
+
+    // Guard against re-entrancy: if we crash while reporting, don't recurse.
+    static std::atomic_flag s_inCrashHandler = ATOMIC_FLAG_INIT;
+    if (s_inCrashHandler.test_and_set()) {
+        std::_Exit(EXIT_FAILURE);
+    }
+
+    ReportUnhandledSignalFault(sig, faultAddress);
+    std::ostringstream popupDetails;
+    popupDetails << "A native signal (" << sig << ") occurred";
+    if (!g_lastEntryLabel.empty()) {
+        popupDetails << " while executing " << g_lastEntryLabel;
+    }
+    if (faultAddress != nullptr) {
+        popupDetails << ".\n\nThe game attempted a " << (isWrite ? "write" : "read")
+                     << " at host address 0x" << std::hex
+                     << reinterpret_cast<uintptr_t>(faultAddress) << std::dec;
+    }
+    popupDetails << ".\n\nThe process transcript and crash log contain the full CPU and stack "
+                    "diagnostics.";
+    ShowRuntimeFatalPopup("a native crash occurred", popupDetails.str());
+    DumpHostStackTrace();
+    WriteFatalLogImpl(sig == SIGBUS ? "sigbus" : "sigsegv");
+
+    std::cerr.flush();
+    std::cout.flush();
+    std::fflush(stdout);
+    std::fflush(stderr);
+    std::_Exit(EXIT_FAILURE);
+}
+
+void InstallPosixMemoryFaultHandler() {
+    struct sigaction action {};
+    action.sa_sigaction = PosixMemoryFaultHandler;
+    action.sa_flags = SA_SIGINFO;
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGSEGV, &action, nullptr);
+    // A touch beyond a memfd-backed mapping's ftruncate()'d size raises SIGBUS rather than
+    // SIGSEGV on Linux; region sizing should make this unreachable, but routing it to the same
+    // handler costs nothing and avoids a silent gap if it ever isn't.
+    sigaction(SIGBUS, &action, nullptr);
 }
 #endif
 
@@ -1155,13 +1350,19 @@ int RuntimeMain(int argc, char** argv) {
     ConfigureWindowsFatalDialogBehavior();
     InstallSehLogger();
     WindowsTimerResolutionGuard timerResolutionGuard;
+#else
+    InstallPosixMemoryFaultHandler();
 #endif
     InitializeProcessTranscript(argc, argv);
+#if defined(_WIN32)
+    // Must run after transcript init, or its diagnostics have no console.log to land in yet.
+    PatchDawnVulkanLoaderForWine();
+#endif
     std::signal(SIGABRT, AbortSignalHandler);
     // Install exit/terminate handlers to ensure we get crash info
     std::atexit(AtExitHandler);
     std::set_terminate(TerminateHandler);
-    
+
     std::string currentEntryLabel;
 
     try {
@@ -1232,13 +1433,20 @@ int RuntimeMain(int argc, char** argv) {
         };
 
         const std::string backend = RuntimeConfigFile::GraphicsApi("auto");
+        AuroraBackend configuredBackend = BACKEND_AUTO;
         for (const auto& entry : kGraphicsBackends) {
             if (backend == entry.configName) {
-                auroraConfig.desiredBackend = entry.backend;
+                configuredBackend = entry.backend;
                 break;
             }
         }
-        const AuroraBackend requestedBackend = auroraConfig.desiredBackend;
+        // Vulkan is preferred under Wine/Proton, but explicitly configuring "d3d12" still opts back into it,
+        // Windows is unaffected: "auto" still tries D3D12 first there
+        auroraConfig.desiredBackend =
+            (configuredBackend == BACKEND_AUTO && RuntimeHostPlatform::IsRunningUnderWine())
+                ? BACKEND_VULKAN
+                : configuredBackend;
+        const AuroraBackend requestedBackend = configuredBackend;
 
         const AuroraInfo auroraInfo = aurora_initialize(0, nullptr, &auroraConfig);
         if (requestedBackend != BACKEND_AUTO && auroraInfo.backend != requestedBackend) {
@@ -1271,10 +1479,10 @@ int RuntimeMain(int argc, char** argv) {
         InitializePersistentCpuContext();
         auto& cpu = GetPersistentCpuContext();
         SeedCpuContext(cpu);
-        
+
         // Initialize the fiber-based threading system
         Fiber::GuestFiberManager::Initialize();
-        
+
         CpuContextScope cpuScope(&cpu);
 
         std::string label = entry->name;
@@ -1289,7 +1497,7 @@ int RuntimeMain(int argc, char** argv) {
         InvokeIndirectCpu(entry->address, &cpu);
         const uint32_t result = cpu.gpr[3];
         RT_LOG(RT_TAG_RUNTIME) << label << " => 0x" << std::hex << result << std::dec << " (" << result << ")" << std::endl;
-        
+
         // Shutdown fiber system
         Fiber::GuestFiberManager::Shutdown();
         WindowPlacementPersistence::Flush(true);
