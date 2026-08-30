@@ -66,6 +66,15 @@ if(NOT WIN32)
     set_target_properties(mkw_libco PROPERTIES UNITY_BUILD OFF)
 endif()
 
+# Musl shim – Dawn prebuilt is glibc; on musl provide __libc_single_threaded etc.
+# The source is empty on glibc/Windows, so the archive is ~empty there and harmless
+# to link unconditionally on non-Windows (avoids a configure-time ldd probe).
+if(NOT WIN32)
+    add_library(mkw_musl_compat STATIC src/musl_compat.c)
+    add_library(mkw::musl_compat ALIAS mkw_musl_compat)
+    set_target_properties(mkw_musl_compat PROPERTIES UNITY_BUILD OFF)
+endif()
+
 # Runtime configuration is real TOML, parsed by toml11 rather than a project-
 # specific line parser. Keep it header-only and vendored so disconnected release
 # builds have exactly the same parser as developer builds.

@@ -80,7 +80,7 @@ target_link_libraries(mkw_runtime_common PRIVATE mkw::pugixml mkw::toml11 mkw::c
 if(WIN32)
     target_link_libraries(mkw_runtime_common PRIVATE shell32 windowsapp)
 else()
-    target_link_libraries(mkw_runtime_common PRIVATE mkw::libco)
+    target_link_libraries(mkw_runtime_common PRIVATE mkw::libco mkw::musl_compat)
 endif()
 if(MKW_CPPWINRT_INCLUDE_DIR)
     if(NOT EXISTS "${MKW_CPPWINRT_INCLUDE_DIR}/winrt/base.h")
@@ -220,7 +220,7 @@ function(mkw_configure_product target)
         # that isn't itself linked against as a target). fiber_manager.cpp's co_* calls live in
         # those objects, so the actual executable link needs mkw::libco directly, same as it
         # needs it independently of that first `if(WIN32)` branch above.
-        target_link_libraries(${target} PRIVATE mkw::libco)
+        target_link_libraries(${target} PRIVATE mkw::libco mkw::musl_compat)
     endif()
     if(WIN32)
         foreach(runtime_dll libc++.dll libunwind.dll)
