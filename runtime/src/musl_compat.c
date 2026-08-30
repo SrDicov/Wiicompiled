@@ -5,6 +5,7 @@
 // Musl compatibility shims for Dawn prebuilt (glibc) on musl
 
 // __libc_single_threaded – glibc internal, Dawn/Tint checks it for single-thread opt
+__attribute__((visibility("default"), used))
 int __libc_single_threaded = 0;
 
 // __isoc23_* – C23 versioned symbols, musl provides unversioned strto* – alias them
