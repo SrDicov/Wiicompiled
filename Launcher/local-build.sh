@@ -63,6 +63,7 @@ ninja_override=""
 dotnet_override=""
 translator_dll_override=""
 translator_bin_override=""
+march_override=""
 
 usage() {
     cat <<'EOF'
@@ -84,6 +85,7 @@ Usage: local-build.sh --output-dir DIR [options]
   --translator-bin PATH           Self-contained Translator.Cli executable (skips building AND needs no dotnet at all)
   --aurora-provider {auto,package,vendor,system}  Dawn provider override (default: auto; use vendor for musl)
   --build-dir DIR                 Native build directory (default: native-build)
+  --march {generic,x86-64,x86-64-v2,x86-64-v3,x86-64-v4,native}  Baseline ISA (default: x86-64-v3 on x86_64, native on aarch64)
 EOF
 }
 
@@ -108,6 +110,7 @@ while [[ $# -gt 0 ]]; do
         --translator-bin) translator_bin_override=$2; shift 2 ;;
         --aurora-provider) aurora_provider_override=$2; shift 2 ;;
         --build-dir) build_override=$2; shift 2 ;;
+        --march) march_override=$2; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) fail "unknown argument: $1" ;;
     esac
@@ -357,10 +360,35 @@ elif [[ "$keep_native_build" -eq 1 ]]; then
     echo "MKWCBUILD: Reusing the incremental native build directory"
 fi
 
+# Invalidate build cache if baseline ISA changed (generic vs v3 vs v4 share same dir would mix flags)
+if [[ -n "${baseline_flag:-}" && -f "$build/CMakeCache.txt" ]]; then
+    cached_flag=$(grep -o 'MKW_BASELINE_ARCH_FLAG:[^=]*=[^ ]*' "$build/CMakeCache.txt" 2>/dev/null | cut -d= -f2- | head -1 || true)
+    if [[ -n "$cached_flag" && "$cached_flag" != "$baseline_flag" ]]; then
+        echo "MKWCBUILD: Baseline ISA changed ($cached_flag -> $baseline_flag); rebuilding from scratch" >&2
+        rm -rf "$build"
+    fi
+fi
+
 log_step configure-native "Configuring the native toolchain"
 # Musl vendor needs a valid google/dawn tag (encounter prebuilt tag doesn't exist in google/dawn)
 # Use a recent tag known to exist and be compatible
 MUSL_DAWN_VERSION="v20260827.013930"
+# Baseline ISA override for matrix builds (generic / v3 / v4)
+baseline_cmake_arg=()
+if [[ -n "$march_override" ]]; then
+    case "$march_override" in
+        generic|x86-64) baseline_flag="-march=x86-64" ;;
+        x86-64-v2) baseline_flag="-march=x86-64-v2" ;;
+        x86-64-v3) baseline_flag="-march=x86-64-v3" ;;
+        x86-64-v4) baseline_flag="-march=x86-64-v4" ;;
+        native) baseline_flag="-march=native" ;;
+        -march=*|-mcpu=*) baseline_flag="$march_override" ;;
+        *) fail "--march must be generic, x86-64, x86-64-v2, x86-64-v3, x86-64-v4, native, or raw -march=/-mcpu= flag" ;;
+    esac
+    baseline_cmake_arg=(-DMKW_BASELINE_ARCH_FLAG="$baseline_flag")
+    echo "Baseline ISA override: $baseline_flag" >&2
+fi
+
 if [[ -n "$aurora_provider_override" ]]; then
     aurora_provider_arg=(-DAURORA_DAWN_PROVIDER="$aurora_provider_override")
     # For musl vendor, override Dawn version to a valid google/dawn tag
@@ -379,7 +407,8 @@ fi
     -DCMAKE_C_COMPILER="$cc_bin" -DCMAKE_CXX_COMPILER="$cxx_bin" \
     -DCMAKE_MAKE_PROGRAM="$ninja_bin" \
     -DMKW_TRANSLATED_COMPILE_JOBS="$translated_jobs" \
-    "${aurora_provider_arg[@]}"
+    "${aurora_provider_arg[@]}" \
+    "${baseline_cmake_arg[@]}"
 
 case "$profile" in
     base) targets=(WiiCompiled) ;;

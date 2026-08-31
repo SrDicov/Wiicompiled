@@ -319,19 +319,32 @@ else()
     message(STATUS "RetroRewind target disabled (run translate-mod and emit-build-shards)")
 endif()
 
-# x86-64-v3 (SSE3/SSSE3/SSE4.1/FMA/AVX2/BMI2) is the baseline runtime/src/host_cpu_baseline.cpp
-# guards against - a fixed, portable floor since an x86_64 build may run on a different machine
-# than the one that built it. AArch64 has no such redistribution path here: every build this
-# project produces runs only on the machine that built it (local-build.sh, and the AppImage which
-# wraps it, always build from source on the target), so -mcpu=native is safe and strictly better -
-# real per-core tuning (scheduling, whatever NEON/atomic extensions that exact CPU actually has)
-# instead of the generic armv8-a baseline Clang would otherwise assume.
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64)$")
-    set(MKW_BASELINE_ARCH_FLAG -march=x86-64-v3)
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
-    set(MKW_BASELINE_ARCH_FLAG -mcpu=native)
+# x86-64 baseline selection: cache-overrideable so CI can build generic / v3 / v4
+# variants side-by-side. Default is v3 (Haswell+ 2013, best balance perf/compat).
+# The host_cpu_baseline.cpp guard must match this flag - see below.
+if(NOT DEFINED MKW_BASELINE_ARCH_FLAG)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64)$")
+        set(MKW_BASELINE_ARCH_FLAG "-march=x86-64-v3" CACHE STRING "Baseline ISA for all translated+runtime targets (-march=x86-64, -march=x86-64-v3, -march=x86-64-v4, -mcpu=native)")
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+        set(MKW_BASELINE_ARCH_FLAG "-mcpu=native" CACHE STRING "Baseline ISA for AArch64")
+    else()
+        set(MKW_BASELINE_ARCH_FLAG "" CACHE STRING "Baseline ISA")
+    endif()
 else()
-    set(MKW_BASELINE_ARCH_FLAG "")
+    set(MKW_BASELINE_ARCH_FLAG "${MKW_BASELINE_ARCH_FLAG}" CACHE STRING "Baseline ISA for all translated+runtime targets" FORCE)
+endif()
+
+# Derive baseline level for host_cpu_baseline.cpp so the early CPUID check matches
+# the compiled ISA. Generic must NOT require AVX2, otherwise it defeats its purpose.
+set(MKW_BASELINE_IS_GENERIC 0)
+set(MKW_BASELINE_IS_V3 0)
+set(MKW_BASELINE_IS_V4 0)
+if(MKW_BASELINE_ARCH_FLAG MATCHES "x86-64-v4")
+    set(MKW_BASELINE_IS_V4 1)
+elseif(MKW_BASELINE_ARCH_FLAG MATCHES "x86-64-v3")
+    set(MKW_BASELINE_IS_V3 1)
+elseif(MKW_BASELINE_ARCH_FLAG MATCHES "x86-64")
+    set(MKW_BASELINE_IS_GENERIC 1)
 endif()
 
 set(MKW_ALL_BUILD_TARGETS
@@ -342,3 +355,28 @@ foreach(target IN LISTS MKW_ALL_BUILD_TARGETS)
         target_compile_options(${target} PRIVATE ${MKW_BASELINE_ARCH_FLAG})
     endif()
 endforeach()
+
+# Propagate baseline define to host_cpu_baseline.cpp so its CPUID guard matches.
+if(MKW_BASELINE_IS_GENERIC)
+    target_compile_definitions(mkw_cpu_baseline PRIVATE MKW_BASELINE_GENERIC=1)
+elseif(MKW_BASELINE_IS_V4)
+    target_compile_definitions(mkw_cpu_baseline PRIVATE MKW_BASELINE_V4=1)
+elseif(MKW_BASELINE_IS_V3)
+    target_compile_definitions(mkw_cpu_baseline PRIVATE MKW_BASELINE_V3=1)
+endif()
+
+# Extra ultra tuning for v3/v4: enable LTO and native tuning where safe.
+# Generic stays at plain -march=x86-64 for max compat; v3/v4 get -O3 already via
+# mkw_apply_common_compile_options, plus we request interprocedural optimization
+# at configure time when available (fallback harmless if compiler lacks it).
+if(MKW_BASELINE_IS_V3 OR MKW_BASELINE_IS_V4)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT _mkw_ipo_supported OUTPUT _mkw_ipo_err)
+    if(_mkw_ipo_supported)
+        foreach(t IN LISTS MKW_ALL_BUILD_TARGETS)
+            if(TARGET ${t})
+                set_property(TARGET ${t} PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+            endif()
+        endforeach()
+    endif()
+endif()

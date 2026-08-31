@@ -23,6 +23,14 @@
 #include <unistd.h>
 #endif
 
+// Baseline selection injected by PublicProducts.cmake via MKW_BASELINE_* defines.
+// Generic => no CPUID gate (runs on any x86-64), V3 => Haswell, V4 => AVX-512.
+#if defined(MKW_BASELINE_GENERIC)
+// Generic build must run on any x86-64 (even pre-SSE4). No gate at all.
+extern "C" int MkwHostCpuBaselineInit() { return 0; }
+__attribute__((constructor(101))) static void MkwHostCpuBaselineCtor() { MkwHostCpuBaselineInit(); }
+#else  // V3 or V4 (default)
+
 namespace {
 
 void HostCpuId(unsigned leaf, unsigned subleaf, unsigned regs[4]) {
@@ -78,6 +86,14 @@ constexpr CpuFeature kRequiredFeatures[] = {
     {"BMI2", 7, 0, 1, 8, false},
     {"LAHF-SAHF", 0x80000001u, 0, 2, 0, false},
     {"LZCNT", 0x80000001u, 0, 2, 5, false},
+#if defined(MKW_BASELINE_V4)
+    // x86-64-v4 adds AVX-512 (F, BW, CD, DQ, VL) on top of v3
+    {"AVX512F", 7, 0, 1, 16, false},
+    {"AVX512DQ", 7, 0, 1, 17, false},
+    {"AVX512CD", 7, 0, 1, 28, false},
+    {"AVX512BW", 7, 0, 1, 30, false},
+    {"AVX512VL", 7, 0, 1, 31, false},
+#endif
 };
 
 // Fixed-capacity text accumulation: no allocation, no exceptions, nothing that
@@ -175,13 +191,25 @@ void WriteStdErrEarly(const char* text) {
 
 [[noreturn]] void ReportUnsupportedCpu(const char* missing) {
     TextBuffer message;
+#if defined(MKW_BASELINE_V4)
+    message.Append(
+        "This build needs a processor that supports AVX-512 and the rest of the "
+        "x86-64-v4 instruction set.\n\nMissing on this machine: ");
+#else
     message.Append(
         "This build needs a processor that supports AVX2 and the rest of the "
         "x86-64-v3 instruction set.\n\nMissing on this machine: ");
+#endif
     message.Append(missing);
+#if defined(MKW_BASELINE_V4)
+    message.Append(
+        "\n\nx86-64-v4 covers Intel Core processors from Skylake-X / Cannon Lake (2017) onward "
+        "and AMD processors from Zen 4 (2022) onward. AVX-512 is required.");
+#else
     message.Append(
         "\n\nx86-64-v3 covers Intel Core processors from Haswell (4th "
         "generation, 2013) onward and AMD processors from Excavator (2015) onward.");
+#endif
 
     // The tag matches RT_TAG_RUNTIME in runtime_log.h. It is spelled out here
     // because this translation unit must not include runtime-wide headers (see
@@ -221,6 +249,8 @@ extern "C" int MkwHostCpuBaselineInit() {
 __attribute__((constructor(101))) static void MkwHostCpuBaselineCtor() {
     MkwHostCpuBaselineInit();
 }
+
+#endif  // !MKW_BASELINE_GENERIC
 
 #else  // !defined(__x86_64__)
 

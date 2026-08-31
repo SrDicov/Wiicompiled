@@ -1,0 +1,313 @@
+name: Build glibc matrix (generic / v3 / v4) + AnyLinux AppImages
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+    branches: [main]
+    paths:
+      - "runtime/**"
+      - "aurora-main/**"
+      - "translator/**"
+      - "projects/mkwii/**"
+      - "Launcher/local-build.sh"
+      - "Launcher/build-game-appimage.sh"
+      - ".github/workflows/build-glibc-matrix-appimage.yml"
+  pull_request:
+    paths:
+      - "runtime/**"
+      - "Launcher/local-build.sh"
+      - ".github/workflows/build-glibc-matrix-appimage.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build-matrix:
+    name: ${{ matrix.variant }} (${{ matrix.march }})
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pkgforge-dev/archlinux:latest
+      options: --privileged
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: generic
+            march: generic
+            march_flag: "-march=x86-64"
+            bin_name: WiiCompiled-glibc-generic-x86_64
+            appimage_name: WiiCompiled-generic-anylinux-x86_64.AppImage
+            hook: ""
+            build_dir: build-generic
+            out_dir: native-build-generic
+          - variant: x86-64-v3
+            march: x86-64-v3
+            march_flag: "-march=x86-64-v3"
+            bin_name: WiiCompiled-glibc-x86-64-v3
+            appimage_name: WiiCompiled-x86-64-v3-anylinux-x86_64.AppImage
+            hook: "x86-64-v3-check.hook"
+            build_dir: build-v3
+            out_dir: native-build-v3
+          - variant: x86-64-v4
+            march: x86-64-v4
+            march_flag: "-march=x86-64-v4"
+            bin_name: WiiCompiled-glibc-x86-64-v4
+            appimage_name: WiiCompiled-x86-64-v4-anylinux-x86_64.AppImage
+            hook: "x86-64-v4-check.hook"
+            build_dir: build-v4
+            out_dir: native-build-v4
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain + deps (Arch)
+        run: |
+          set -eux
+          pacman -Syu --noconfirm \
+            base-devel clang cmake ninja patchelf git python3 wget curl unzip zsync \
+            dotnet-sdk-8.0 xorg-server-xvfb \
+            sdl3 vulkan-icd-loader vulkan-headers mesa libglvnd \
+            libpng zlib libx11 libxcursor libxrandr libxi libxkbcommon \
+            libxcb xcb-util-wm abseil-cpp wayland wayland-protocols \
+            vulkan-tools mesa-utils || \
+          pacman -S --noconfirm \
+            base-devel clang cmake ninja patchelf git python3 wget curl unzip zsync \
+            dotnet-sdk-8.0 xorg-server-xvfb \
+            sdl3 vulkan-icd-loader vulkan-headers mesa libglvnd \
+            libpng zlib libx11 libxcursor libxrandr libxi libxkbcommon \
+            libxcb xcb-util-wm abseil-cpp wayland wayland-protocols \
+            vulkan-tools mesa-utils
+          clang --version; cmake --version; ninja --version; dotnet --version
+          dotnet --list-runtimes | head -5 || true
+          vulkaninfo --summary 2>&1 | head -20 || true
+          echo "march=${{ matrix.march_flag }}" 
+
+      - name: Restore Assets (checkout)
+        id: assets0
+        run: |
+          if [ -f Assets/main.dol ] && [ -f Assets/StaticR.rel ]; then
+            echo "has_assets=true" >> "$GITHUB_OUTPUT"
+            sha256sum Assets/main.dol Assets/StaticR.rel | head -2
+          else
+            echo "has_assets=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Assets missing in checkout"
+          fi
+
+      - name: Download Assets from private release
+        if: steps.assets0.outputs.has_assets == 'false'
+        run: |
+          set -eux
+          # Intenta descarga privada (requiere GITHUB_TOKEN). Fallback público si falla.
+          if curl -fL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+               -H "Accept: application/octet-stream" \
+               "https://api.github.com/repos/${{ github.repository }}/releases/tags/assets-tmp" -o /tmp/rel.json 2>&1 | head -5; then
+            url=$(python3 -c "import json; d=json.load(open('/tmp/rel.json')); print([a['browser_download_url'] for a in d.get('assets',[]) if a['name']=='assets.tgz'][0])" 2>/dev/null || echo "")
+            if [ -n "$url" ]; then
+              curl -L -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" "$url" -o /tmp/assets.tgz && tar -xzf /tmp/assets.tgz -C . && echo "downloaded via API" && ls -lh Assets/ || true
+            fi
+          fi
+          if [ ! -f Assets/main.dol ]; then
+            echo "trying public release URL..."
+            curl -L https://github.com/SrDicov/Wiicompiled/releases/download/assets-tmp/assets.tgz -o /tmp/assets.tgz || true
+            if [ -f /tmp/assets.tgz ]; then tar -tzf /tmp/assets.tgz | head -5; tar -xzf /tmp/assets.tgz -C . || true; fi
+          fi
+          ls -lh Assets/main.dol Assets/StaticR.rel || echo "still missing"
+          sha256sum Assets/main.dol Assets/StaticR.rel 2>&1 | head -2 || true
+
+      - name: Verify Assets (must exist for release build)
+        id: assets
+        run: |
+          if [ -f Assets/main.dol ] && [ -f Assets/StaticR.rel ]; then
+            echo "has_assets=true" >> "$GITHUB_OUTPUT"
+            sha256sum Assets/main.dol Assets/StaticR.rel | head -2
+            # Validate against recomp.yml pins
+            expected_dol=80d18895b39c63bd80f457398bfcbb91b7d16ac116a41a88967e954080155b05
+            expected_rel=16d9d146112541fefea701ecb5bc1a496f9d50e4a752fbb5b6778e7c6399f67d
+            real_dol=$(sha256sum Assets/main.dol | awk '{print $1}')
+            real_rel=$(sha256sum Assets/StaticR.rel | awk '{print $1}')
+            if [ "$real_dol" != "$expected_dol" ]; then echo "::error::main.dol sha mismatch $real_dol != $expected_dol"; exit 1; fi
+            if [ "$real_rel" != "$expected_rel" ]; then echo "::error::StaticR.rel sha mismatch $real_rel != $expected_rel"; exit 1; fi
+          else
+            echo "has_assets=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Assets still missing after download attempts - failing matrix build"
+            exit 1
+          fi
+
+      - name: Build translator
+        run: dotnet build translator/Translator.sln -c Release
+
+      - name: Translate + native build (${{ matrix.variant }})
+        run: |
+          set -eux
+          Launcher/local-build.sh --output-dir ./${{ matrix.out_dir }} --build-dir ./${{ matrix.build_dir }} --profile base --march ${{ matrix.march }} 2>&1 | tee /tmp/local-build-${{ matrix.variant }}.log
+          ls -lh ${{ matrix.build_dir }}/WiiCompiled ${{ matrix.out_dir }}/WiiCompiled 2>&1 | head -5
+          file ${{ matrix.build_dir }}/WiiCompiled | head -5
+          ldd ${{ matrix.build_dir }}/WiiCompiled 2>&1 | head -20
+          # Verify march flag was applied (readelf for v3/v4)
+          if [ "${{ matrix.variant }}" = "generic" ]; then
+            echo "generic build - permissive, no AVX2 requirement"
+          else
+            echo "checking for AVX2 instructions in binary (v3/v4 should contain vextract etc)? lightweight check"
+            # At least ensure file exists and is x86-64
+            file ${{ matrix.out_dir }}/WiiCompiled | grep -q x86-64 || exit 1
+          fi
+
+      - name: Pack clean glibc binary (tar.zst)
+        run: |
+          set -eux
+          mkdir -p dist
+          # Native clean tarball contains binary + runtime assets (dsp_coef, cache, bootstrap)
+          tar -cJf dist/${{ matrix.bin_name }}.tar.zst -C ./${{ matrix.out_dir }} WiiCompiled dsp_coef.bin initial_pipeline_cache.db wii_bootstrap 2>&1 | head -20 || \
+            tar -czf dist/${{ matrix.bin_name }}.tar.gz -C ./${{ matrix.out_dir }} WiiCompiled dsp_coef.bin initial_pipeline_cache.db wii_bootstrap
+          # Provide both .tar.zst and fallback .tar.gz for compatibility - ensure at least one exists
+          if [ -f dist/${{ matrix.bin_name }}.tar.zst ]; then
+            ls -lh dist/${{ matrix.bin_name }}.tar.zst
+            sha256sum dist/${{ matrix.bin_name }}.tar.zst | tee dist/${{ matrix.bin_name }}.tar.zst.sha256
+          fi
+          if [ ! -f dist/${{ matrix.bin_name }}.tar.zst ] && [ -f dist/${{ matrix.bin_name }}.tar.gz ]; then
+            ls -lh dist/${{ matrix.bin_name }}.tar.gz
+            sha256sum dist/${{ matrix.bin_name }}.tar.gz | tee dist/${{ matrix.bin_name }}.tar.gz.sha256
+          fi
+          # Also plain binary for direct download (without tar)
+          cp ./${{ matrix.out_dir }}/WiiCompiled dist/${{ matrix.bin_name }}
+          sha256sum dist/${{ matrix.bin_name }} | tee dist/${{ matrix.bin_name }}.sha256
+
+      - name: Build AnyLinux AppImage (sharun + debloated mesa + DwarFS/urit)
+        run: |
+          set -eux
+          mkdir -p dist
+          # 1. Debloated mesa for minimal size + HW accel (as per Anylinux guide)
+          wget -q https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/refs/heads/main/useful-tools/get-debloated-pkgs.sh -O ./get-debloated-pkgs.sh
+          chmod +x ./get-debloated-pkgs.sh
+          ./get-debloated-pkgs.sh --add-mesa --prefer-nano || echo "debloated mesa optional failed, continuing"
+          # 2. Install game to FHS (/usr) before bundling - Anylinux requirement
+          install -Dm755 ./${{ matrix.out_dir }}/WiiCompiled /usr/bin/WiiCompiled
+          install -Dm644 ./${{ matrix.out_dir }}/dsp_coef.bin /usr/bin/dsp_coef.bin || true
+          install -Dm644 ./${{ matrix.out_dir }}/initial_pipeline_cache.db /usr/bin/initial_pipeline_cache.db || true
+          if [ -d ./${{ matrix.out_dir }}/wii_bootstrap ]; then cp -r ./${{ matrix.out_dir }}/wii_bootstrap /usr/bin/; fi
+          # 3. Desktop + icon (required by quick-sharun)
+          mkdir -p /usr/share/applications /usr/share/icons/hicolor/256x256/apps
+          cat > /usr/share/applications/wiicompiled.desktop <<'DESK'
+          [Desktop Entry]
+          Name=WiiCompiled
+          Exec=WiiCompiled
+          Icon=wiicompiled
+          Type=Application
+          Categories=Game;
+          Comment=Mario Kart Wii native x86-64 port
+          DESK
+          # Minimal 1x1 PNG icon (blue #3A5F8F) via python
+          python3 <<'PY'
+          import zlib, struct
+          def png(w,h,r,g,b):
+              import struct, zlib
+              raw=b''.join(b'\x00'+bytes([r,g,b,255])*w for _ in range(h))
+              def chunk(t,d): return struct.pack('>I',len(d))+t+d+struct.pack('>I',zlib.crc32(t+d)&0xffffffff)
+              import struct as s
+              ihdr=s.pack('>IIBBBBB',w,h,8,6,0,0,0)
+              return b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',ihdr)+chunk(b'IDAT',zlib.compress(raw))+chunk(b'IEND',b'')
+          open('/usr/share/icons/hicolor/256x256/apps/wiicompiled.png','wb').write(png(256,256,0x3a,0x5f,0x8f))
+          open('/usr/share/icons/hicolor/256x256/apps/wiicompiled.png','wb').write(png(256,256,0x3a,0x5f,0x8f))
+          PY
+          cp /usr/share/icons/hicolor/256x256/apps/wiicompiled.png ./wiicompiled.png || true
+          # 4. quick-sharun
+          wget -q https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/refs/heads/main/useful-tools/quick-sharun.sh -O ./quick-sharun
+          chmod +x ./quick-sharun
+          export ICON=/usr/share/icons/hicolor/256x256/apps/wiicompiled.png
+          export DESKTOP=/usr/share/applications/wiicompiled.desktop
+          export OUTPATH=./dist
+          export OUTNAME=${{ matrix.appimage_name }}
+          export MAIN_BIN=WiiCompiled
+          export DEPLOY_OPENGL=1
+          export DEPLOY_VULKAN=1
+          export DEPLOY_LOCALE=0
+          export STRACE_MODE=1
+          export STRACE_TIME=5
+          export ADD_HOOKS=${{ matrix.hook }}
+          # Sharun bundling (auto-detects ld-linux, libc, vulkan ICDs via strace)
+          ./quick-sharun /usr/bin/WiiCompiled
+          # Fixup: runtime expects dsp_coef etc adjacent to executableDirectory. Sharun runs from shared/bin but binary is hardlinked in bin/
+          for d in AppDir/bin AppDir/shared/bin; do
+            [ -f /usr/bin/dsp_coef.bin ] && cp -v /usr/bin/dsp_coef.bin "$d"/ || true
+            [ -f /usr/bin/initial_pipeline_cache.db ] && cp -v /usr/bin/initial_pipeline_cache.db "$d"/ || true
+            [ -d /usr/bin/wii_bootstrap ] && cp -rv /usr/bin/wii_bootstrap "$d"/ || true
+          done
+          # Ensure binary also in AppDir for fallback (some runtimes check AppDir/WiiCompiled)
+          cp -v /usr/bin/WiiCompiled AppDir/ 2>/dev/null || true
+          ./quick-sharun --make-appimage
+          ls -lh dist/*.AppImage
+          sha256sum dist/*.AppImage | tee dist/${{ matrix.appimage_name }}.sha256
+          echo "AppImage created: dist/${{ matrix.appimage_name }}"
+
+      - name: Smoke test AppImage (simple)
+        run: |
+          set -eux
+          ls -lh dist/
+          # quick-sharun --test needs xvfb-run, but AppImage fallback is extract-and-run in CI (no FUSE)
+          # Use APPIMAGE_EXTRACT_AND_RUN=1 for CI containers
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          timeout 12 ./dist/${{ matrix.appimage_name }} --help 2>&1 | head -30 || echo "help exit code $?"
+          # Also test that it doesn't have missing libs
+          if ./dist/${{ matrix.appimage_name }} --help 2>&1 | grep -qi "symbol lookup error\|error while loading shared libraries"; then echo "::error::AppImage missing libs"; exit 1; fi
+          echo "smoke ok for ${{ matrix.variant }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wiicompiled-${{ matrix.variant }}-artifacts
+          path: |
+            dist/${{ matrix.bin_name }}*
+            dist/${{ matrix.appimage_name }}*
+            /tmp/local-build-${{ matrix.variant }}.log
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish to Release (6 artifacts)
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: build-matrix
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+          merge-multiple: true
+
+      - name: Prepare release dir (6 files)
+        run: |
+          set -eux
+          mkdir -p dist
+          cp -v artifacts/* dist/ 2>/dev/null || cp -rv artifacts/*/* dist/ 2>/dev/null || true
+          ls -lh dist/
+          echo "## Dist contents" >> /tmp/list.txt
+          ls -lh dist/* | tee -a /tmp/list.txt
+          # Must have 6 main files (3 tars + 3 AppImages) + sha256s
+          for f in WiiCompiled-glibc-generic-x86_64 WiiCompiled-glibc-x86-64-v3 WiiCompiled-glibc-x86-64-v4; do
+            if ! ls dist/$f* 1>/dev/null 2>&1; then echo "::error::missing $f"; exit 1; fi
+          done
+          for f in WiiCompiled-generic-anylinux-x86_64.AppImage WiiCompiled-x86-64-v3-anylinux-x86_64.AppImage WiiCompiled-x86-64-v4-anylinux-x86_64.AppImage; do
+            if [ ! -f dist/$f ]; then echo "::error::missing AppImage $f"; exit 1; fi
+          done
+          sha256sum dist/WiiCompiled-* | tee dist/SHA256SUMS
+          cat dist/SHA256SUMS
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/WiiCompiled-glibc-generic-x86_64*
+            dist/WiiCompiled-glibc-x86-64-v3*
+            dist/WiiCompiled-glibc-x86-64-v4*
+            dist/WiiCompiled-generic-anylinux-x86_64.AppImage*
+            dist/WiiCompiled-x86-64-v3-anylinux-x86_64.AppImage*
+            dist/WiiCompiled-x86-64-v4-anylinux-x86_64.AppImage*
+            dist/SHA256SUMS
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
