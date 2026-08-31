@@ -97,6 +97,18 @@ chmod +x ./quick-sharun
 echo "Bundling con sharun (detecta + bundlea ld-linux, libc 2.44, abseil 2605, etc.)..."
 ./quick-sharun /usr/bin/WiiCompiled
 
+# Fix: el runtime busca dsp_coef.bin etc. adyacentes al binario (executableDirectory).
+# sharun pone el binario en shared/bin y hace hardlink en bin/, así que copiar a ambos.
+echo "Fix adyacentes para runtime (dsp_coef.bin, cache, wii_bootstrap)..."
+for d in "$APPDIR/shared/bin" "$APPDIR/bin"; do
+  mkdir -p "$d"
+  cp -v /usr/bin/dsp_coef.bin "$d/" 2>/dev/null || cp -v /usr/share/wiicompiled/dsp_coef.bin "$d/" 2>/dev/null || true
+  cp -v /usr/bin/initial_pipeline_cache.db "$d/" 2>/dev/null || cp -v /usr/share/wiicompiled/initial_pipeline_cache.db "$d/" 2>/dev/null || true
+  if [ -d /usr/bin/wii_bootstrap ]; then cp -rv /usr/bin/wii_bootstrap "$d/" 2>/dev/null || true
+  elif [ -d /usr/share/wiicompiled/wii_bootstrap ]; then cp -rv /usr/share/wiicompiled/wii_bootstrap "$d/" 2>/dev/null || true; fi
+done
+ls -lh "$APPDIR/shared/bin/dsp_coef.bin" "$APPDIR/bin/dsp_coef.bin" 2>&1 | head -5
+
 echo "Empaquetando AppImage con dwarfs + uruntime..."
 ./quick-sharun --make-appimage
 
