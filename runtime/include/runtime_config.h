@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -64,6 +65,13 @@ struct RuntimeUserConfig {
     // comma-separated SDL-style physical button names ("south", or
     // "dpad_up,left_shoulder") as values; pressing either bound button counts.
     std::array<std::optional<std::string>, 12> controllerButtons;
+#ifdef _WIN32
+    // One-based physical WUP-028 adapter port assigned to each game port.
+    // Zero or a missing value means the adapter does not own that game port.
+    std::array<uint32_t, 4> gameCubeAdapterPorts{};
+#endif
+    std::optional<bool> rumbleEnabled;
+    std::map<std::string, std::string> controllerExpressions;
 };
 
 namespace RuntimeConfigFile {
@@ -295,6 +303,10 @@ inline void EnsureConfigFile() {
               "# guest can observe it. Set to false to mix inline on the guest\n"
               "# thread exactly as the runtime did before.\n"
               "mix_worker = true\n\n"
+              "[controller]\n"
+              "# Force feedback for every port. The game still asks for rumble;\n"
+              "# this decides whether those requests reach the hardware.\n"
+              "rumble = true\n\n"
               "[network]\n"
               "enabled = true\n\n"
               "[paths]\n"
@@ -372,6 +384,25 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     for (size_t index = 0; index < buttonKeys.size(); ++index) {
         config.controllerButtons[index] =
             FindConfigValue<std::string>(document, "controller", buttonKeys[index]);
+    }
+#ifdef _WIN32
+    for (size_t index = 0; index < config.gameCubeAdapterPorts.size(); ++index) {
+        const std::string key = "adapter_port_" + std::to_string(index + 1);
+        if (auto value = FindConfigUint(document, "controller", key); value && *value <= 4) {
+            config.gameCubeAdapterPorts[index] = *value;
+        }
+    }
+#endif
+
+    config.rumbleEnabled = FindConfigValue<bool>(document, "controller", "rumble");
+
+    if (const auto* section = document.contains("controller") ? &document.at("controller") : nullptr;
+        section != nullptr && section->is_table()) {
+        for (const auto& [key, value] : section->as_table()) {
+            if (key.rfind("expr_", 0) == 0 && value.is_string()) {
+                config.controllerExpressions[key] = value.as_string();
+            }
+        }
     }
 
     config.widescreen = FindConfigValue<bool>(document, "video", "widescreen");
@@ -635,6 +666,40 @@ inline bool SetControllerButton(size_t index, std::string value) {
     }
     Mutable().controllerButtons[index] = value;
     return WriteSetting("controller", kControllerButtonKeys[index], FormatString(value));
+}
+
+#ifdef _WIN32
+inline int GameCubeAdapterPort(size_t gamePort) {
+    if (gamePort >= Get().gameCubeAdapterPorts.size()) return -1;
+    const uint32_t physicalPort = Get().gameCubeAdapterPorts[gamePort];
+    return physicalPort >= 1 && physicalPort <= 4 ? static_cast<int>(physicalPort - 1) : -1;
+}
+
+inline bool SetGameCubeAdapterPort(size_t gamePort, int physicalPort) {
+    if (gamePort >= Mutable().gameCubeAdapterPorts.size() || physicalPort < -1 || physicalPort >= 4) return false;
+    const uint32_t storedPort = physicalPort < 0 ? 0u : static_cast<uint32_t>(physicalPort + 1);
+    Mutable().gameCubeAdapterPorts[gamePort] = storedPort;
+    return WriteSetting("controller", "adapter_port_" + std::to_string(gamePort + 1), std::to_string(storedPort));
+}
+#endif
+
+inline std::string ControllerExpression(const std::string& key) {
+    const auto it = Get().controllerExpressions.find(key);
+    return it == Get().controllerExpressions.end() ? std::string() : it->second;
+}
+
+inline bool SetControllerExpression(const std::string& key, const std::string& value) {
+    Mutable().controllerExpressions[key] = value;
+    return WriteSetting("controller", key, FormatString(value));
+}
+
+inline bool RumbleEnabled(bool fallback = true) {
+    return Get().rumbleEnabled.value_or(fallback);
+}
+
+inline bool SetRumbleEnabled(bool value) {
+    Mutable().rumbleEnabled = value;
+    return WriteSetting("controller", "rumble", value ? "true" : "false");
 }
 
 inline bool SetAudioVolume(float value) {
