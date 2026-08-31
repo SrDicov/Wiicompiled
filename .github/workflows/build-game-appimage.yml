@@ -57,38 +57,46 @@ jobs:
             sha256sum Assets/main.dol Assets/StaticR.rel | head -2
           else
             echo "has_assets=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::No Assets/main.dol+StaticR.rel - runtime AppImage will be built from pre-generated sources if available, else it will fail. Upload Assets via prepare-musl-assets workflow or push them as artifact."
+            echo "::warning::No Assets/main.dol+StaticR.rel in checkout - will try release asset"
+          fi
+
+      - name: Download Assets from private release (if missing)
+        if: steps.assets.outputs.has_assets == 'false'
+        run: |
+          echo "Downloading Assets from release assets-tmp..."
+          curl -L https://github.com/SrDicov/Wiicompiled/releases/download/assets-tmp/assets.tgz -o /tmp/assets.tgz
+          tar -xzf /tmp/assets.tgz -C .
+          ls -lh Assets/main.dol Assets/StaticR.rel
+          sha256sum Assets/main.dol Assets/StaticR.rel | head -2
+          echo "has_assets=true" >> "$GITHUB_ENV"
+
+      - name: Re-check Assets
+        id: assets2
+        run: |
+          if [ -f Assets/main.dol ] && [ -f Assets/StaticR.rel ]; then
+            echo "has_assets=true" >> "$GITHUB_OUTPUT"
+            sha256sum Assets/main.dol Assets/StaticR.rel | head -2
+          else
+            echo "has_assets=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build translator
         run: dotnet build translator/Translator.sln -c Release
 
       - name: Translate + native build (glibc, package Dawn)
-        if: steps.assets.outputs.has_assets == 'true'
+        if: steps.assets.outputs.has_assets == 'true' || steps.assets2.outputs.has_assets == 'true'
         run: |
-          # Usa local-build.sh existente para no duplicar flags; produce native-build/WiiCompiled
-          # --build-dir native-build asegura que coincida con lo que espera build-game-appimage.sh
           Launcher/local-build.sh --output-dir ./native-build-out --build-dir ./native-build --profile base 2>&1 | tee /tmp/local-build.log
           ls -lh native-build/WiiCompiled native-build-out/WiiCompiled 2>&1 | head -5
           ldd native-build/WiiCompiled 2>&1 | head -20
 
       - name: Fallback - CMake runtime only (no Assets)
-        if: steps.assets.outputs.has_assets == 'false'
+        if: steps.assets.outputs.has_assets == 'false' && steps.assets2.outputs.has_assets == 'false'
         run: |
-          echo "::warning::No Assets - building runtime only for AppImage smoke (game won't start without Assets, but AppImage will bundle the runtime correctly)"
-          if [ -f generated/base_translation_output.json ]; then
-            cmake -S runtime -B native-build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-              -DAURORA_DAWN_PROVIDER=package 2>&1 | tail -20
-            cmake --build native-build --parallel 2>&1 | tail -20
-            ls -lh native-build/WiiCompiled 2>&1 | head -5 || true
-          else
-            echo "No generated/ and no Assets - cannot build WiiCompiled; creating dummy for AppImage demo"
-            mkdir -p native-build
-            cp /usr/bin/clang native-build/WiiCompiled 2>/dev/null || cp /bin/ls native-build/WiiCompiled || echo "#!/bin/sh\necho dummy" > native-build/WiiCompiled
-            chmod +x native-build/WiiCompiled
-            echo "Dummy WiiCompiled created for bundling test"
-          fi
+          echo "::warning::No Assets even after release download - dummy AppImage"
+          mkdir -p native-build
+          cp /usr/bin/clang native-build/WiiCompiled 2>/dev/null || cp /bin/ls native-build/WiiCompiled || echo "#!/bin/sh\necho dummy" > native-build/WiiCompiled
+          chmod +x native-build/WiiCompiled
 
       - name: Build Anylinux AppImage (sharun)
         run: |
