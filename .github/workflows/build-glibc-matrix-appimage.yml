@@ -280,19 +280,29 @@ jobs:
         run: |
           set -eux
           mkdir -p dist
-          cp -v artifacts/* dist/ 2>/dev/null || cp -rv artifacts/*/* dist/ 2>/dev/null || true
+          # Artifacts from matrix are nested: artifacts/__w/Wiicompiled/Wiicompiled/dist/* and artifacts/tmp/*
+          # Use find to flatten correctly (merge-multiple:true keeps internal paths).
+          find artifacts -type f \( -name "WiiCompiled*" -o -name "*.sha256" -o -name "*.zsync" \) -exec cp -v {} dist/ \; || true
+          # Also plain binaries without extension are named WiiCompiled-glibc-* (no .tar), ensure they are found
+          find artifacts -type f -name "WiiCompiled-glibc-*" -exec cp -v {} dist/ \; || true
+          # Fallback: if find missed due to path, try direct dist
+          if [ -d "artifacts/__w" ]; then
+            find artifacts -path "*/dist/WiiCompiled*" -exec cp -v {} dist/ \; || true
+          fi
           ls -lh dist/
           echo "## Dist contents" >> /tmp/list.txt
-          ls -lh dist/* | tee -a /tmp/list.txt
+          ls -lh dist/* 2>&1 | tee -a /tmp/list.txt || true
+          find dist -type f | sort | tee -a /tmp/list.txt
           # Must have 6 main files (3 tars + 3 AppImages) + sha256s
           for f in WiiCompiled-glibc-generic-x86_64 WiiCompiled-glibc-x86-64-v3 WiiCompiled-glibc-x86-64-v4; do
-            if ! ls dist/$f* 1>/dev/null 2>&1; then echo "::error::missing $f"; exit 1; fi
+            if ! ls dist/$f* 1>/dev/null 2>&1; then echo "::error::missing $f (found: $(ls dist/ | tr '\n' ' '))"; exit 1; fi
           done
           for f in WiiCompiled-generic-anylinux-x86_64.AppImage WiiCompiled-x86-64-v3-anylinux-x86_64.AppImage WiiCompiled-x86-64-v4-anylinux-x86_64.AppImage; do
-            if [ ! -f dist/$f ]; then echo "::error::missing AppImage $f"; exit 1; fi
+            if [ ! -f dist/$f ]; then echo "::error::missing AppImage $f (found: $(ls dist/ | tr '\n' ' '))"; exit 1; fi
           done
           sha256sum dist/WiiCompiled-* | tee dist/SHA256SUMS
           cat dist/SHA256SUMS
+          ls -lh dist/SHA256SUMS dist/WiiCompiled-* 2>&1 | head -20
 
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2
