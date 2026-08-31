@@ -6,8 +6,8 @@ if((NOT (WIN32 AND MINGW)) AND (NOT CMAKE_SYSTEM_NAME STREQUAL "Linux"))
 endif()
 if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
    NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR
-   NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64)$")
-    message(FATAL_ERROR "WiiCompiled requires 64-bit Clang targeting x86_64 (aarch64 is planned; the ISA layer's x86 seams are isolated but its NEON port does not exist yet)")
+   NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64|aarch64|arm64|ARM64)$")
+    message(FATAL_ERROR "WiiCompiled requires 64-bit Clang targeting x86_64 or aarch64")
 endif()
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     message(FATAL_ERROR "WiiCompiled only supports Release builds")
@@ -74,6 +74,7 @@ if(NOT WIN32)
     add_library(mkw::musl_compat ALIAS mkw_musl_compat)
     set_target_properties(mkw_musl_compat PROPERTIES UNITY_BUILD OFF)
 endif()
+
 
 # Runtime configuration is real TOML, parsed by toml11 rather than a project-
 # specific line parser. Keep it header-only and vendored so disconnected release

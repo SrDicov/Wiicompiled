@@ -4,28 +4,25 @@
 // build/PCH) and runs from a priority-101 C initializer, ahead of every C++ dynamic initializer
 // and thus the first AVX2 code that could execute. Keep it free of anything that could pull in
 // vectorized code: no iostreams, no std::string, no runtime-wide headers.
+//
+// x86-64-v3 is an x86-specific optional-feature baseline (AVX2/BMI2/FMA and friends are not
+// guaranteed present on every x86_64 chip); nothing here applies on AArch64, where ASIMD/NEON is
+// mandatory in the base architecture and PublicProducts.cmake never applies an -march=x86-64-v3
+// equivalent flag to begin with. That branch below is a no-op stub, not a port of this check.
+
+#if defined(__x86_64__)
 
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 
-#if defined(__x86_64__) || defined(_M_X64)
 #include <cpuid.h>
-#define MKW_BASELINE_X86 1
-#elif defined(__aarch64__) || defined(_M_ARM64)
-// aarch64 has no x86-64-v3 equivalent wired up yet (no -march baseline is set for it either).
-// The future ARM check belongs here, reading getauxval(AT_HWCAP) flags instead of CPUID.
-#define MKW_BASELINE_X86 0
-#else
-#error "Unsupported host architecture for the CPU baseline check"
-#endif
 #if defined(_WIN32)
 #include <windows.h>
 #else
 #include <unistd.h>
 #endif
 
-#if MKW_BASELINE_X86
 namespace {
 
 void HostCpuId(unsigned leaf, unsigned subleaf, unsigned regs[4]) {
@@ -209,15 +206,12 @@ void WriteStdErrEarly(const char* text) {
 }
 
 }  // namespace
-#endif  // MKW_BASELINE_X86
 
 extern "C" int MkwHostCpuBaselineInit() {
-#if MKW_BASELINE_X86
     TextBuffer missing;
     if (!CollectMissingBaselineFeatures(missing)) {
         ReportUnsupportedCpu(missing.data);
     }
-#endif
     return 0;
 }
 
@@ -227,3 +221,11 @@ extern "C" int MkwHostCpuBaselineInit() {
 __attribute__((constructor(101))) static void MkwHostCpuBaselineCtor() {
     MkwHostCpuBaselineInit();
 }
+
+#else  // !defined(__x86_64__)
+
+extern "C" int MkwHostCpuBaselineInit() {
+    return 0;
+}
+
+#endif  // defined(__x86_64__)

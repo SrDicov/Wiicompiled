@@ -80,7 +80,9 @@ target_link_libraries(mkw_runtime_common PRIVATE mkw::pugixml mkw::toml11 mkw::c
 if(WIN32)
     target_link_libraries(mkw_runtime_common PRIVATE shell32 windowsapp)
 else()
-    target_link_libraries(mkw_runtime_common PRIVATE mkw::libco)
+    # ${CMAKE_DL_LIBS} for music_attenuation.cpp's dlopen of libdbus-1 (MPRIS
+    # media monitoring). Empty string on glibc >= 2.34 where dl* is in libc.
+    target_link_libraries(mkw_runtime_common PRIVATE mkw::libco ${CMAKE_DL_LIBS})
     # Musl shim must be whole-archive: Dawn prebuilt (glibc) refs __libc_single_threaded etc
     # which are not yet needed when the static lib is first seen, so normal archive
     # semantics would discard the shim objects before Dawn is processed.
@@ -223,8 +225,10 @@ function(mkw_configure_product target)
         # target_link_libraries (object libraries don't carry usage requirements to a consumer
         # that isn't itself linked against as a target). fiber_manager.cpp's co_* calls live in
         # those objects, so the actual executable link needs mkw::libco directly, same as it
-        # needs it independently of that first `if(WIN32)` branch above.
-        target_link_libraries(${target} PRIVATE mkw::libco)
+        # needs it independently of that first `if(WIN32)` branch above. ${CMAKE_DL_LIBS} is
+        # here for the same reason: music_attenuation.cpp's dlopen(libdbus-1) lives in those
+        # objects (empty string on glibc >= 2.34, where dl* is in libc).
+        target_link_libraries(${target} PRIVATE mkw::libco ${CMAKE_DL_LIBS})
         target_link_libraries(${target} PRIVATE -Wl,--whole-archive mkw::musl_compat -Wl,--no-whole-archive)
     endif()
     if(WIN32)
@@ -315,11 +319,26 @@ else()
     message(STATUS "RetroRewind target disabled (run translate-mod and emit-build-shards)")
 endif()
 
+# x86-64-v3 (SSE3/SSSE3/SSE4.1/FMA/AVX2/BMI2) is the baseline runtime/src/host_cpu_baseline.cpp
+# guards against - a fixed, portable floor since an x86_64 build may run on a different machine
+# than the one that built it. AArch64 has no such redistribution path here: every build this
+# project produces runs only on the machine that built it (local-build.sh, and the AppImage which
+# wraps it, always build from source on the target), so -mcpu=native is safe and strictly better -
+# real per-core tuning (scheduling, whatever NEON/atomic extensions that exact CPU actually has)
+# instead of the generic armv8-a baseline Clang would otherwise assume.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64)$")
+    set(MKW_BASELINE_ARCH_FLAG -march=x86-64-v3)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+    set(MKW_BASELINE_ARCH_FLAG -mcpu=native)
+else()
+    set(MKW_BASELINE_ARCH_FLAG "")
+endif()
+
 set(MKW_ALL_BUILD_TARGETS
     mkw_runtime_common mkw_base_shared mkw_base_sensitive mkw_retro_sensitive
     mkw_retro_rewind_functions WiiCompiled RetroRewind)
 foreach(target IN LISTS MKW_ALL_BUILD_TARGETS)
-    if(TARGET ${target})
-        target_compile_options(${target} PRIVATE -march=x86-64-v3)
+    if(TARGET ${target} AND MKW_BASELINE_ARCH_FLAG)
+        target_compile_options(${target} PRIVATE ${MKW_BASELINE_ARCH_FLAG})
     endif()
 endforeach()

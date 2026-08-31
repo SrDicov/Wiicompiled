@@ -57,13 +57,15 @@ The port does NOT pretend to be a Wii Remote or Classic Controller.
 Mappings are positional (`south`, `east`, `west`, `north`) rather than Xbox-labelled, so the
 same config makes sense on Xbox, PlayStation, Nintendo and generic SDL pads alike, and extra
 inputs like paddles, touchpads and share buttons show up when the hardware reports them.
+The official Wii U / Switch GameCube adapter (WUP-028) works too; as with Dolphin, on Windows the
+adapter must be switched to the WinUSB driver once (Zadig).
 
 ## Requirements
 
 - Windows 10 or 11, 64-bit
 - GPU: GTX 1650 / RX 6400 / Arc A310 or higher
 - CPU: Intel Core i5-8400 / AMD Ryzen 5 2600 (4c/6c, ~3.5GHz+) or higher
-- About 20 GB of free disk space during installation
+- About 20 GB of free disk space during installation (Final game size ~5 GB)
 - A clean, unmodified **PAL `RMCP01`** disc image of Mario Kart Wii, dumped by you. ISO, GCM,
   GCZ, CISO, WBFS, WIA and RVZ are accepted.
 

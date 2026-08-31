@@ -44,7 +44,7 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
     }
 
     PADStatus statuses[PAD_CHANMAX]{};
-    const uint32_t rumbleMask = PADRead(statuses);
+    uint32_t rumbleMask = PADRead(statuses);
 
     try {
         for (uint32_t i = 0; i < PAD_CHANMAX; ++i) {

@@ -1,5 +1,6 @@
 #include "settings_overlay.h"
 #include "audio_backend.h"
+#include "controller_mapping_wizard.h"
 #include "game_graphics_options.h"
 #include "host_platform.h"
 #include "music_attenuation.h"
@@ -267,7 +268,6 @@ void SetTopBarVisible(bool visible) {
         return;
     }
     g_topBarVisible = visible;
-    PADBlockInput(visible);
 }
 
 void ApplyConfiguredMappings() {
@@ -321,20 +321,27 @@ void DrawControllerSettings() {
     }
 
     ImGui::Separator();
+    const uint32_t selectedGamePort = static_cast<uint32_t>(g_controllerPort);
+    const char* currentName = PADGetName(selectedGamePort);
+    ImGui::Text("Assigned: %s", currentName != nullptr ? currentName : "None");
+    if (ImGui::MenuItem("Unassign controller")) {
+        PADClearPort(selectedGamePort);
+        g_configuredControllerIndices.fill(std::numeric_limits<int32_t>::min());
+    }
+    ImGui::Separator();
+    controller_mapping_wizard::DrawSetupList();
     const uint32_t controllerCount = PADCount();
     if (controllerCount == 0) {
         ImGui::TextDisabled("No controller connected");
         return;
     }
 
-    const char* currentName = PADGetName(static_cast<uint32_t>(g_controllerPort));
-    ImGui::Text("Assigned: %s", currentName != nullptr ? currentName : "None");
     if (ImGui::BeginMenu("Assign connected controller")) {
         for (uint32_t index = 0; index < controllerCount; ++index) {
             const char* name = PADGetNameForControllerIndex(index);
             ImGui::PushID(static_cast<int>(index));
             if (ImGui::MenuItem(name != nullptr ? name : "Unknown controller")) {
-                PADSetPortForIndex(index, static_cast<uint32_t>(g_controllerPort));
+                PADSetPortForIndex(index, selectedGamePort);
                 g_configuredControllerIndices.fill(std::numeric_limits<int32_t>::min());
                 ApplyConfiguredMappings();
             }
@@ -486,7 +493,6 @@ void DrawControllerSettings() {
         ImGui::TextUnformatted(kControllerButtons[i].label);
         ImGui::PopID();
     }
-
 }
 
 void DrawAudioSettings() {
@@ -532,8 +538,8 @@ void DrawAudioSettings() {
             "Runs the AX/DSP voice mix off the game thread. Turn this off if you "
             "suspect an audio problem; the mix then runs inline as it used to.");
     }
-    // Windows Media Control (winrt/Windows.Media.Control.h) wont do anything
-    // under Wine/Proton, so hide the toggle
+    // Windows Media Control (winrt/Windows.Media.Control.h) and MPRIS both use this
+    // toggle; hide it under Wine/Proton where neither backend is reliable.
     if (!RuntimeHostPlatform::IsRunningUnderWine()) {
         ImGui::Separator();
         if (ImGui::Checkbox("Mute game music while external media is playing",
@@ -545,9 +551,9 @@ void DrawAudioSettings() {
             if (MusicAttenuation::IsExternalMediaPlaying()) {
                 ImGui::TextDisabled("External media is playing; game music is muted.");
             } else if (!MusicAttenuation::IsMediaControlInitializationComplete()) {
-                ImGui::TextDisabled("Waiting for Windows Media Control...");
+                ImGui::TextDisabled("Waiting for media controls...");
             } else if (!MusicAttenuation::IsMediaControlAvailable()) {
-                ImGui::TextDisabled("Windows Media Control is unavailable.");
+                ImGui::TextDisabled("Media controls are unavailable.");
             } else {
                 ImGui::TextDisabled("No external media is currently playing.");
             }
@@ -852,6 +858,7 @@ void PersistDisplayModeIfChanged() {
 } // namespace
 
 void InitializeRuntimeSettings() noexcept {
+    controller_mapping_wizard::LoadPersistedMappings();
     ApplyConfiguredMappings();
     AudioBackend::Instance().SetMasterVolume(static_cast<float>(g_audioVolumePercent) / 100.0f);
     AudioBackend::Instance().SetMuted(g_audioMuted);
@@ -870,7 +877,7 @@ void InitializeRuntimeSettings() noexcept {
     aurora_set_skip_unready_pipelines(g_skipUnreadyPipelines);
     g_strapInputAccepted.store(false, std::memory_order_relaxed);
     g_startupDismissFrame.store(UINT64_MAX, std::memory_order_relaxed);
-    PADBlockInput(g_topBarVisible);
+    PADBlockInput(false);
 }
 
 void HandleEvents(const AuroraEvent* events) noexcept {
@@ -884,6 +891,7 @@ void HandleEvents(const AuroraEvent* events) noexcept {
         if (ev->type != AURORA_SDL_EVENT) {
             continue;
         }
+        controller_mapping_wizard::HandleSdlEvent(ev->sdl);
         if (IsToggleKey(ev->sdl, SDL_SCANCODE_F10)) {
             SetTopBarVisible(!g_topBarVisible);
         }
@@ -905,6 +913,9 @@ void Draw() noexcept {
     }
     DrawFpsOverlay();
     DrawTopBar();
+    controller_mapping_wizard::Draw();
+    // The wizard captures raw presses; keep them out of the game.
+    PADBlockInput(controller_mapping_wizard::IsActive());
     DrawStartupScreen();
 }
 

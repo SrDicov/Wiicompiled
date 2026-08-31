@@ -7,8 +7,9 @@ Static recompilation of Mario Kart Wii (PAL `RMCP01`) into a native x86-64 execu
 - `translator/` — .NET 8 (C#) static recompiler: DOL/REL parser → PowerPC decode → IR/SSA lift → emits C++. CLI entry: `translator/src/Translator.Cli`.
 - `runtime/` — C++17 runtime (HLE of Wii OS/GX/audio/input under `runtime/src/hle`), built on vendored aurora (`aurora-main/`) for rendering/windowing.
 - `Launcher/` — PowerShell setup/installer tooling consumed by Wheel Wizard; Linux build script `Launcher/local-build.sh`.
+- `build.sh` (root) — self-contained cross-compilation wrapper: fetches llvm-mingw, translates, compiles. Different from `Launcher/local-build.sh` which is for native Linux builds.
 
-Platforms: Windows (LLVM-MinGW, Release only) **and** Linux x86_64 (clang, Release only). CI tests only the translator on Windows.
+Platforms: Windows (LLVM-MinGW, Release only) **and** Linux x86_64 (clang, Release only). CI tests only the translator on Windows. Musl builds supported via `AURORA_DAWN_PROVIDER=vendor`.
 
 ## Commands
 
@@ -23,7 +24,7 @@ Linux native build (requires clang, cmake, ninja, dotnet, legally dumped PAL `ma
 Launcher/local-build.sh --output-dir /path/to/output --profile base
 ```
 
-- Default translator tests need no game binaries and no host C++ compiler.
+- Default translator tests need no game binaries and no host C++ compiler. Tests use xunit.
 - Single test filter: `dotnet test ... --filter <Name>`.
 - `RECOMP_GENERIC_DOL=<path>` opt-in generic DOL translation test.
 - CI (`.github/workflows/build.yml`) only runs translator build+test on `windows-latest`. Runtime is NOT CI-checked locally.
