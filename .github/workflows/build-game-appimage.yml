@@ -34,10 +34,10 @@ jobs:
 
       - name: Install toolchain + game deps
         run: |
-          pacman -Syu --no-confirm \
+          pacman -Syu --noconfirm \
             base-devel clang cmake ninja patchelf git python3 wget curl unzip zsync \
             dotnet-sdk-8.0 xorg-server-xvfb \
-            sdl3 sdl3_ttf vulkan-loader vulkan-headers mesa \
+            sdl3 vulkan-loader vulkan-headers mesa \
             libpng zlib libx11 libxcursor libxrandr libxi libxkbcommon \
             libxcb xcb-util-wm abseil-cpp wayland wayland-protocols
           clang --version; cmake --version; ninja --version; dotnet --version
