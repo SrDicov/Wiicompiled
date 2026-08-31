@@ -54,6 +54,14 @@ struct RuntimeUserConfig {
     std::optional<bool> audioMuted;
     std::optional<bool> audioMixWorker;
     std::optional<bool> attenuateMusicWhenMediaPlays;
+    // Real Wii Remotes (with or without Nunchuk / Classic Controller) and Wii U Pro
+    // Controllers paired over Bluetooth, driven by SDL's HIDAPI Wii driver. The driver
+    // is opt-in on SDL's side, so this decides whether the runtime turns it on.
+    std::optional<bool> wiiRemotes;
+    // Keep re-enumerating Bluetooth HID devices while no Wii controller is connected
+    // (Dolphin's "continuous scanning"), so a remote that dropped or was switched on
+    // after launch shows up without restarting.
+    std::optional<bool> wiiContinuousScan;
     std::optional<bool> networkEnabled;
     std::optional<std::string> nandRoot;
     std::optional<std::string> dvdRoot;
@@ -395,6 +403,8 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
 #endif
 
     config.rumbleEnabled = FindConfigValue<bool>(document, "controller", "rumble");
+    config.wiiRemotes = FindConfigValue<bool>(document, "controller", "wii_remotes");
+    config.wiiContinuousScan = FindConfigValue<bool>(document, "controller", "wii_continuous_scan");
 
     if (const auto* section = document.contains("controller") ? &document.at("controller") : nullptr;
         section != nullptr && section->is_table()) {
@@ -700,6 +710,29 @@ inline bool RumbleEnabled(bool fallback = true) {
 inline bool SetRumbleEnabled(bool value) {
     Mutable().rumbleEnabled = value;
     return WriteSetting("controller", "rumble", value ? "true" : "false");
+}
+
+// Bluetooth Wii Remotes / Wii U Pro Controllers. Read once before SDL's joystick
+// subsystem comes up, so a change only takes effect on the next launch.
+inline bool WiiRemotesEnabled(bool fallback = true) {
+    return Get().wiiRemotes.value_or(fallback);
+}
+
+// Persists the Bluetooth Wii Remote driver switch.
+inline bool SetWiiRemotesEnabled(bool value) {
+    Mutable().wiiRemotes = value;
+    return WriteSetting("controller", "wii_remotes", value ? "true" : "false");
+}
+
+// Whether to keep rescanning Bluetooth while no Wii controller is connected.
+inline bool WiiContinuousScanEnabled(bool fallback = true) {
+    return Get().wiiContinuousScan.value_or(fallback);
+}
+
+// Persists the continuous scanning switch.
+inline bool SetWiiContinuousScanEnabled(bool value) {
+    Mutable().wiiContinuousScan = value;
+    return WriteSetting("controller", "wii_continuous_scan", value ? "true" : "false");
 }
 
 inline bool SetAudioVolume(float value) {
