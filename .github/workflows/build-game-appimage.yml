@@ -76,8 +76,6 @@ jobs:
         if: steps.assets.outputs.has_assets == 'false'
         run: |
           echo "::warning::No Assets - building runtime only for AppImage smoke (game won't start without Assets, but AppImage will bundle the runtime correctly)"
-          # Genera un runtime mínimo sin traducción para validar el bundling de libs
-          # Si hay generated/ de un run previo con Assets, el script siguiente lo usará
           if [ -f generated/base_translation_output.json ]; then
             cmake -S runtime -B native-build -G Ninja -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
@@ -87,7 +85,9 @@ jobs:
           else
             echo "No generated/ and no Assets - cannot build WiiCompiled; creating dummy for AppImage demo"
             mkdir -p native-build
-            cp /usr/bin/vkcube native-build/WiiCompiled 2>/dev/null || cp /usr/bin/glxgears native-build/WiiCompiled
+            cp /usr/bin/clang native-build/WiiCompiled 2>/dev/null || cp /bin/ls native-build/WiiCompiled || echo "#!/bin/sh\necho dummy" > native-build/WiiCompiled
+            chmod +x native-build/WiiCompiled
+            echo "Dummy WiiCompiled created for bundling test"
           fi
 
       - name: Build Anylinux AppImage (sharun)
