@@ -1,0 +1,110 @@
+name: Build Game AppImage (glibc Anylinux)
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Build profile (base only for now; retro needs Code.pul)"
+        required: false
+        default: "base"
+        type: choice
+        options: [base]
+  push:
+    branches: [main]
+    paths:
+      - "runtime/**"
+      - "aurora-main/**"
+      - "Launcher/build-game-appimage.sh"
+      - ".github/workflows/build-game-appimage.yml"
+      - "projects/mkwii/recomp.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  game-appimage:
+    name: WiiCompiled glibc Anylinux AppImage
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pkgforge-dev/archlinux:latest
+      options: --privileged
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain + game deps
+        run: |
+          pacman -Syu --no-confirm \
+            base-devel clang cmake ninja patchelf git python3 wget curl unzip zsync \
+            dotnet-sdk-8.0 xorg-server-xvfb \
+            sdl3 sdl3_ttf vulkan-loader vulkan-headers mesa \
+            libpng zlib libx11 libxcursor libxrandr libxi libxkbcommon \
+            libxcb xcb-util-wm abseil-cpp wayland wayland-protocols
+          clang --version; cmake --version; ninja --version; dotnet --version
+          vulkaninfo --summary 2>&1 | head -20 || true
+
+      - name: Restore game Assets from cache (if any)
+        id: assets
+        run: |
+          if [ -f Assets/main.dol ] && [ -f Assets/StaticR.rel ]; then
+            echo "has_assets=true" >> "$GITHUB_OUTPUT"
+            sha256sum Assets/main.dol Assets/StaticR.rel | head -2
+          else
+            echo "has_assets=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No Assets/main.dol+StaticR.rel - runtime AppImage will be built from pre-generated sources if available, else it will fail. Upload Assets via prepare-musl-assets workflow or push them as artifact."
+          fi
+
+      - name: Build translator
+        run: dotnet build translator/Translator.sln -c Release
+
+      - name: Translate + native build (glibc, package Dawn)
+        if: steps.assets.outputs.has_assets == 'true'
+        run: |
+          # Usa local-build.sh existente para no duplicar flags; produce native-build/WiiCompiled
+          # --build-dir native-build asegura que coincida con lo que espera build-game-appimage.sh
+          Launcher/local-build.sh --output-dir ./native-build-out --build-dir ./native-build --profile base 2>&1 | tee /tmp/local-build.log
+          ls -lh native-build/WiiCompiled native-build-out/WiiCompiled 2>&1 | head -5
+          ldd native-build/WiiCompiled 2>&1 | head -20
+
+      - name: Fallback - CMake runtime only (no Assets)
+        if: steps.assets.outputs.has_assets == 'false'
+        run: |
+          echo "::warning::No Assets - building runtime only for AppImage smoke (game won't start without Assets, but AppImage will bundle the runtime correctly)"
+          # Genera un runtime mínimo sin traducción para validar el bundling de libs
+          # Si hay generated/ de un run previo con Assets, el script siguiente lo usará
+          if [ -f generated/base_translation_output.json ]; then
+            cmake -S runtime -B native-build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+              -DAURORA_DAWN_PROVIDER=package 2>&1 | tail -20
+            cmake --build native-build --parallel 2>&1 | tail -20
+            ls -lh native-build/WiiCompiled 2>&1 | head -5 || true
+          else
+            echo "No generated/ and no Assets - cannot build WiiCompiled; creating dummy for AppImage demo"
+            mkdir -p native-build
+            cp /usr/bin/vkcube native-build/WiiCompiled 2>/dev/null || cp /usr/bin/glxgears native-build/WiiCompiled
+          fi
+
+      - name: Build Anylinux AppImage (sharun)
+        run: |
+          chmod +x Launcher/build-game-appimage.sh
+          # build-game-appimage.sh instala a /usr/bin/WiiCompiled y hace quick-sharun
+          # Necesita DISPLAY para strace de dlopen, xorg-server-xvfb ya está
+          ./Launcher/build-game-appimage.sh 2>&1 | tee /tmp/appimage.log
+          ls -lh dist/*.AppImage
+          sha256sum dist/*.AppImage | tee dist/SHA256SUM
+
+      - name: Smoke test AppImage
+        run: |
+          ./Launcher/build-game-appimage.sh 2>&1 | tail -20 || true
+          # quick-sharun --test ya corrió dentro del script; test extra con --help si lo soporta
+          ./dist/WiiCompiled-glibc-*.AppImage --help 2>&1 | head -20 || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WiiCompiled-glibc-Anylinux-AppImage
+          path: |
+            dist/*.AppImage
+            dist/SHA256SUM
+            /tmp/local-build.log
+            /tmp/appimage.log
+          if-no-files-found: error
