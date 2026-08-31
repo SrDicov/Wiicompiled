@@ -80,6 +80,14 @@ struct RuntimeUserConfig {
 #endif
     std::optional<bool> rumbleEnabled;
     std::map<std::string, std::string> controllerExpressions;
+    std::optional<bool> ffbEnabled;
+    std::optional<int32_t> ffbStrength;
+    std::optional<int32_t> ffbSpring;
+    std::optional<int32_t> ffbVibration;
+    std::optional<bool> ffbForceWheel;
+    std::optional<int32_t> steeringSensitivity;
+    std::optional<int32_t> acceleratorAxis;
+    std::optional<int32_t> brakeAxis;
 };
 
 namespace RuntimeConfigFile {
@@ -405,6 +413,14 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.rumbleEnabled = FindConfigValue<bool>(document, "controller", "rumble");
     config.wiiRemotes = FindConfigValue<bool>(document, "controller", "wii_remotes");
     config.wiiContinuousScan = FindConfigValue<bool>(document, "controller", "wii_continuous_scan");
+    config.ffbEnabled = FindConfigValue<bool>(document, "ffb", "enabled");
+    config.ffbStrength = FindConfigInt(document, "ffb", "strength");
+    config.ffbSpring = FindConfigInt(document, "ffb", "spring");
+    config.ffbVibration = FindConfigInt(document, "ffb", "vibration");
+    config.ffbForceWheel = FindConfigValue<bool>(document, "ffb", "force_wheel");
+    config.steeringSensitivity = FindConfigInt(document, "controller", "steering_sensitivity");
+    config.acceleratorAxis = FindConfigInt(document, "controller", "accelerator_axis");
+    config.brakeAxis = FindConfigInt(document, "controller", "brake_axis");
 
     if (const auto* section = document.contains("controller") ? &document.at("controller") : nullptr;
         section != nullptr && section->is_table()) {
@@ -733,6 +749,82 @@ inline bool WiiContinuousScanEnabled(bool fallback = true) {
 inline bool SetWiiContinuousScanEnabled(bool value) {
     Mutable().wiiContinuousScan = value;
     return WriteSetting("controller", "wii_continuous_scan", value ? "true" : "false");
+}
+
+inline bool FfbEnabled(bool fallback = true) { return Get().ffbEnabled.value_or(fallback); }
+
+inline int32_t FfbStrength(int32_t fallback = 100) {
+    return std::clamp(Get().ffbStrength.value_or(fallback), 0, 100);
+}
+
+inline int32_t FfbSpring(int32_t fallback = 60) {
+    return std::clamp(Get().ffbSpring.value_or(fallback), 0, 100);
+}
+
+inline int32_t FfbVibration(int32_t fallback = 70) {
+    return std::clamp(Get().ffbVibration.value_or(fallback), 0, 100);
+}
+
+inline bool FfbForceWheel(bool fallback = false) {
+    return Get().ffbForceWheel.value_or(fallback);
+}
+
+inline int32_t AcceleratorAxis(int32_t fallback = -1) {
+    const int32_t value = Get().acceleratorAxis.value_or(fallback);
+    return value >= 1 && value <= 7 ? value : -1;
+}
+
+inline int32_t BrakeAxis(int32_t fallback = -1) {
+    const int32_t value = Get().brakeAxis.value_or(fallback);
+    return value >= 1 && value <= 7 ? value : -1;
+}
+
+inline int32_t SteeringSensitivity(int32_t fallback = 350) {
+    return std::clamp(Get().steeringSensitivity.value_or(fallback), 100, 900);
+}
+
+inline bool SetFfbEnabled(bool value) {
+    Mutable().ffbEnabled = value;
+    return WriteSetting("ffb", "enabled", value ? "true" : "false");
+}
+
+inline bool SetFfbStrength(int32_t value) {
+    value = std::clamp(value, 0, 100);
+    Mutable().ffbStrength = value;
+    return WriteSetting("ffb", "strength", std::to_string(value));
+}
+
+inline bool SetFfbSpring(int32_t value) {
+    value = std::clamp(value, 0, 100);
+    Mutable().ffbSpring = value;
+    return WriteSetting("ffb", "spring", std::to_string(value));
+}
+
+inline bool SetFfbVibration(int32_t value) {
+    value = std::clamp(value, 0, 100);
+    Mutable().ffbVibration = value;
+    return WriteSetting("ffb", "vibration", std::to_string(value));
+}
+
+inline bool SetFfbForceWheel(bool value) {
+    Mutable().ffbForceWheel = value;
+    return WriteSetting("ffb", "force_wheel", value ? "true" : "false");
+}
+
+inline bool SetAcceleratorAxis(int32_t value) {
+    Mutable().acceleratorAxis = value;
+    return WriteSetting("controller", "accelerator_axis", std::to_string(value));
+}
+
+inline bool SetBrakeAxis(int32_t value) {
+    Mutable().brakeAxis = value;
+    return WriteSetting("controller", "brake_axis", std::to_string(value));
+}
+
+inline bool SetSteeringSensitivity(int32_t value) {
+    value = std::clamp(value, 100, 900);
+    Mutable().steeringSensitivity = value;
+    return WriteSetting("controller", "steering_sensitivity", std::to_string(value));
 }
 
 inline bool SetAudioVolume(float value) {

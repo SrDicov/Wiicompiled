@@ -1,7 +1,9 @@
 #include "hle_stubs.h"
 #include "memory.h"
 #include "hle/controller_status_contract.h"
+#include "controller_mapping_wizard.h"
 #include "input_bindings.h"
+#include "wheel_ffb.h"
 #ifdef _WIN32
 #include "wup028_adapter.h"
 #endif
@@ -127,6 +129,12 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
 
     FillTriggersHeldByButtons(statuses);
     InputBindings::Apply(statuses);
+    for (uint32_t i = 0; i < PAD_CHANMAX; ++i) {
+        if (statuses[i].err == PAD_ERR_NONE) {
+            statuses[i].stickX = static_cast<int8_t>(wheel_ffb::ShapeSteering(i, statuses[i].stickX));
+            statuses[i].button |= static_cast<uint16_t>(wheel_ffb::PedalButtons(i));
+        }
+    }
 
     try {
         for (uint32_t i = 0; i < PAD_CHANMAX; ++i) {
@@ -157,6 +165,9 @@ extern "C" void PAD__ControlMotor_HLE(int32_t chan, uint32_t command)
 {
     if (command == PAD_MOTOR_RUMBLE && !g_rumbleEnabled.load(std::memory_order_relaxed)) {
         command = PAD_MOTOR_STOP;
+    }
+    if (wheel_ffb::OnMotorCommand(chan, command)) {
+        return;
     }
 #if defined(_WIN32)
     if (!Wup028Adapter::SetRumble(static_cast<uint32_t>(chan), command == PAD_MOTOR_RUMBLE)) {
