@@ -42,7 +42,6 @@ runtime:
   native_registration_root: runtime/src
   native_abi_directories:
     - runtime/src/hle/gx
-  guest_address_table: runtime/include/region/rmce01.h
 
 output:
   root: generated
