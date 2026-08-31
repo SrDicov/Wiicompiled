@@ -39,13 +39,19 @@ file ./native-build/WiiCompiled | grep -q "interpreter /lib64/ld-linux" || {
 
 # 4) Instalar binario al FHS para que sharun lo encuentre
 install -Dm755 ./native-build/WiiCompiled /usr/bin/WiiCompiled
+# Archivos que el runtime espera ADYACENTES al binario (executableDirectory/dsp_coef.bin etc.)
+install -Dm644 ./native-build/dsp_coef.bin /usr/bin/dsp_coef.bin 2>/dev/null || install -Dm644 ./build/dsp_coef.bin /usr/bin/dsp_coef.bin 2>/dev/null || true
+install -Dm644 ./native-build/initial_pipeline_cache.db /usr/bin/initial_pipeline_cache.db 2>/dev/null || install -Dm644 ./build/initial_pipeline_cache.db /usr/bin/initial_pipeline_cache.db 2>/dev/null || true
+if [ -d ./native-build/wii_bootstrap ]; then
+	cp -r ./native-build/wii_bootstrap /usr/bin/wii_bootstrap
+elif [ -d ./build/wii_bootstrap ]; then
+	cp -r ./build/wii_bootstrap /usr/bin/wii_bootstrap
+elif [ -d ./wii_bootstrap ]; then
+	cp -r ./wii_bootstrap /usr/bin/wii_bootstrap
+fi
+# También en share para compatibilidad con instalaciones FHS
 install -Dm644 ./native-build/dsp_coef.bin /usr/share/wiicompiled/dsp_coef.bin 2>/dev/null || true
 install -Dm644 ./native-build/initial_pipeline_cache.db /usr/share/wiicompiled/initial_pipeline_cache.db 2>/dev/null || true
-if [ -d ./native-build/wii_bootstrap ]; then
-	cp -r ./native-build/wii_bootstrap /usr/share/wiicompiled/wii_bootstrap
-elif [ -d ./wii_bootstrap ]; then
-	cp -r ./wii_bootstrap /usr/share/wiicompiled/wii_bootstrap
-fi
 
 # 5) Desktop + Icon (requeridos por appimagetool)
 mkdir -p /usr/share/applications /usr/share/icons/hicolor/256x256/apps
