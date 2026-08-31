@@ -36,7 +36,7 @@ jobs:
         include:
           - variant: generic
             march: generic
-            march_flag: "-march=x86-64"
+            march_flag: "-march=x86-64-v3"
             bin_name: WiiCompiled-glibc-generic-x86_64
             appimage_name: WiiCompiled-generic-anylinux-x86_64.AppImage
             hook: ""

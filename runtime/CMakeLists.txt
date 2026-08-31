@@ -246,6 +246,11 @@ set(MKW_RETRO_REWIND_PRODUCT_SOURCE "${CMAKE_CURRENT_LIST_DIR}/src/product/retro
 set(MKW_CPU_BASELINE_SOURCE "${CMAKE_CURRENT_LIST_DIR}/src/host_cpu_baseline.cpp")
 list(REMOVE_ITEM SOURCES ${MKW_BASE_PRODUCT_SOURCE} ${MKW_RETRO_REWIND_PRODUCT_SOURCE}
      ${MKW_CPU_BASELINE_SOURCE})
+# wup028 adapter is Windows-only (WinUSB/SetupAPI). Exclude on Linux/macOS where <windows.h>
+# and the WinUSB headers are absent; pad.cpp already guards its use with #ifdef _WIN32.
+if(NOT WIN32)
+    list(FILTER SOURCES EXCLUDE REGEX "src/wup028_adapter\\.cpp$")
+endif()
 
 # The translator emits the complete, content-addressed source graph. Consuming
 # this one manifest keeps configure independent of the 28k generated function
