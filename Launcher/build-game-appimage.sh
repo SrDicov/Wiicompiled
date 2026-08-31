@@ -14,12 +14,13 @@ if [ "$(uname -m)" != "x86_64" ]; then
 	echo "Solo x86_64 soportado para WiiCompiled" >&2; exit 1
 fi
 
-# 1) Instalar deps de build + runtime (Arch)
-pacman -Syu --noconfirm \
-	base-devel patchelf wget xorg-server-xvfb zsync git \
-	sdl3 sdl3_ttf vulkan-loader vulkan-tools mesa-utils \
+# 1) Instalar deps de build + runtime (Arch) - ya hecho por workflow, solo fallback
+pacman -Sy --noconfirm --needed \
+	base-devel clang cmake ninja patchelf git python3 wget curl unzip zsync \
+	dotnet-sdk xorg-server-xvfb \
+	sdl3 vulkan-icd-loader vulkan-headers mesa \
 	libpng zlib libx11 libxcursor libxrandr libxi libxkbcommon \
-	abseil-cpp
+	libxcb xcb-util-wm abseil-cpp wayland wayland-protocols 2>/dev/null || echo "deps ya instaladas por workflow"
 
 # 2) Mesa debloated para tamaño (opcional, recomendado)
 echo "Instalando paquetes debloated..."
