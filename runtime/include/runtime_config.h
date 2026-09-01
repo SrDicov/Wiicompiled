@@ -237,23 +237,43 @@ inline std::optional<std::filesystem::path> ExecutableDirectory() {
 // The portable root this executable lives under, or nullopt for a normal installation. The answer
 // cannot change while the process runs, so it is resolved exactly once: every user-state path
 // derives from it and they must not disagree with each other.
+// For AppImage, also checks APPIMAGE parent and OWD/current_path so portable data lives beside the .AppImage, not in /tmp.
 inline const std::optional<std::filesystem::path>& PortableRootDirectory() {
     static const std::optional<std::filesystem::path> root = []() -> std::optional<std::filesystem::path> {
-        const auto executableDirectory = ExecutableDirectory();
-        if (!executableDirectory) {
+        auto checkUpwards = [](std::filesystem::path start) -> std::optional<std::filesystem::path> {
+            std::filesystem::path cur = std::move(start);
+            for (int lvl=0; lvl<=kPortableSearchDepth; ++lvl) {
+                std::error_code ec;
+                if (std::filesystem::is_regular_file(cur / kPortableMarkerFileName, ec)) return cur;
+                auto parent = cur.parent_path(); if (parent.empty()||parent==cur) break; cur=parent;
+            }
             return std::nullopt;
+        };
+        // 1) Executable directory (normal + AppImage extracted)
+        if (auto exeDir = ExecutableDirectory()) {
+            if (auto r = checkUpwards(*exeDir)) return r;
         }
-        std::filesystem::path current = *executableDirectory;
-        for (int level = 0; level <= kPortableSearchDepth; ++level) {
-            std::error_code ec;
-            if (std::filesystem::is_regular_file(current / kPortableMarkerFileName, ec)) {
-                return current;
+        // 2) AppImage file location (APPIMAGE env) - where user expects portable beside .AppImage
+        if (const char* appimage = std::getenv("APPIMAGE"); appimage && *appimage) {
+            std::filesystem::path p(appimage);
+            std::error_code ec; if (std::filesystem::exists(p, ec)) {
+                if (auto r = checkUpwards(p.parent_path())) return r;
             }
-            const auto parent = current.parent_path();
-            if (parent.empty() || parent == current) {
-                break;
+        }
+        // 3) OWD (sharun original working dir) and current_path (common for AppImage double-click)
+        if (const char* owd = std::getenv("OWD"); owd && *owd) {
+            if (auto r = checkUpwards(std::filesystem::path(owd))) return r;
+        }
+        {
+            std::error_code ec; auto cur = std::filesystem::current_path(ec);
+            if (!ec) {
+                // Only consider current_path if it looks like a portable launch (contains .AppImage or writable)
+                bool hasAppImage=false;
+                for (auto &e: std::filesystem::directory_iterator(cur, ec)) if (e.path().extension()==".AppImage") {hasAppImage=true; break;}
+                if (hasAppImage) {
+                    if (auto r = checkUpwards(cur)) return r;
+                }
             }
-            current = parent;
         }
         return std::nullopt;
     }();
