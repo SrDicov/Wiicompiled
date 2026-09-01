@@ -32,12 +32,66 @@ namespace AxDspHle {
 namespace {
 
 std::filesystem::path FindDspCoefficientRom() {
+    auto check_adjacent = [](const std::filesystem::path& dir) -> std::optional<std::filesystem::path> {
+        const auto p = dir / "dsp_coef.bin";
+        if (std::filesystem::is_regular_file(p)) return p;
+        // AppImage/sharun: binary is at AppDir/bin or shared/bin, assets may be at AppDir/bin or AppDir/shared/bin or AppDir root
+        const auto parent = dir.parent_path();
+        if (!parent.empty()) {
+            const auto up = parent / "dsp_coef.bin";
+            if (std::filesystem::is_regular_file(up)) return up;
+            const auto share_bin = parent / "shared" / "bin" / "dsp_coef.bin";
+            if (std::filesystem::is_regular_file(share_bin)) return share_bin;
+            const auto bin = parent / "bin" / "dsp_coef.bin";
+            if (std::filesystem::is_regular_file(bin)) return bin;
+        }
+        return std::nullopt;
+    };
+
+    // 1) Adjacent to executable (covers native build, AppImage bin/ and shared/bin via parent checks)
     if (const auto executableDirectory = RuntimeConfigFile::ExecutableDirectory()) {
-        const auto adjacent = *executableDirectory / "dsp_coef.bin";
-        if (std::filesystem::is_regular_file(adjacent)) {
-            return adjacent;
+        if (auto hit = check_adjacent(*executableDirectory)) return *hit;
+        // If executable is at AppDir/bin/WiiCompiled, also try AppDir directly via parent
+        const auto parent = executableDirectory->parent_path();
+        if (!parent.empty()) {
+            if (auto hit = check_adjacent(parent)) return *hit;
         }
     }
+
+    // 2) Sharun/AppImage env vars (SHARUN_DIR is AppDir, APPDIR is AppImage mount)
+    for (const char* envName : {"SHARUN_DIR", "APPDIR", "OWD"}) {
+        if (const char* env = std::getenv(envName); env && *env) {
+            std::filesystem::path base(env);
+            for (const auto& sub : {"", "bin", "shared/bin", "usr/bin"}) {
+                const auto cand = base / sub / "dsp_coef.bin";
+                if (std::filesystem::is_regular_file(cand)) return cand;
+            }
+            // Also try AppDir directly
+            const auto direct = base / "dsp_coef.bin";
+            if (std::filesystem::is_regular_file(direct)) return direct;
+        }
+    }
+
+    // 3) XDG_DATA_DIRS (sharun sets this to include AppDir/share) and /usr/share fallback
+    if (const char* xdg = std::getenv("XDG_DATA_DIRS"); xdg && *xdg) {
+        std::string dirs(xdg);
+        size_t start = 0;
+        while (start < dirs.size()) {
+            size_t end = dirs.find(':', start);
+            std::string one = dirs.substr(start, end == std::string::npos ? std::string::npos : end - start);
+            if (!one.empty()) {
+                const auto cand = std::filesystem::path(one) / "wiicompiled" / "dsp_coef.bin";
+                if (std::filesystem::is_regular_file(cand)) return cand;
+                const auto cand2 = std::filesystem::path(one) / "dsp_coef.bin";
+                if (std::filesystem::is_regular_file(cand2)) return cand2;
+            }
+            if (end == std::string::npos) break;
+            start = end + 1;
+        }
+    }
+    // Fallback /usr/share
+    const auto usrShare = std::filesystem::path("/usr/share/wiicompiled/dsp_coef.bin");
+    if (std::filesystem::is_regular_file(usrShare)) return usrShare;
 
     for (auto base = std::filesystem::current_path(); !base.empty();) {
         const auto sourceTreeAsset = base / "runtime" / "assets" / "dsp" / "dsp_coef.bin";

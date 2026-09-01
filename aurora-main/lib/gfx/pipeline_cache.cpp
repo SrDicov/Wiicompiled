@@ -561,14 +561,70 @@ static void pipeline_cache_abort() {
 static bool write_pipeline_cache_record(const PipelineCacheWrite& write);
 
 static std::string pipeline_cache_seed_path() {
+  // Try resourcesPath first (SDL_GetBasePath or sharun's SHARUN_DIR), then fallback to
+  // executable-adjacent and env-based locations for AppImage robustness.
+  auto try_path = [](const char* base) -> std::string {
+    if (!base || !*base) return {};
+    std::string p{base};
+    if (p.back() != '/' && p.back() != '\\') p += '/';
+    p += InitialPipelineCacheName;
+    // Use SDL_IOFromFile to test existence via the same VFS mechanism later, but quick
+    // filesystem check here avoids extra SDL calls for missing files.
+    if (std::filesystem::exists(p)) return p;
+    return {};
+  };
+
+  // 1) Normal resourcesPath (SDL_GetBasePath)
+  if (g_config.resourcesPath && g_config.resourcesPath[0] != '\0') {
+    std::string path{g_config.resourcesPath};
+    if (path.back() != '/' && path.back() != '\\') path += '/';
+    path += InitialPipelineCacheName;
+    // If file exists at resourcesPath, use it directly (fast path)
+    if (std::filesystem::exists(path)) return path;
+    // Also check parent and sibling bin/shared/bin for AppImage layout where
+    // resourcesPath may be .../bin but file is in .../shared/bin or vice versa
+    std::filesystem::path rp{g_config.resourcesPath};
+    for (auto cand : {rp.parent_path() / InitialPipelineCacheName,
+                      rp / ".." / "shared" / "bin" / InitialPipelineCacheName,
+                      rp / ".." / "bin" / InitialPipelineCacheName}) {
+      if (std::filesystem::exists(cand)) return cand.string();
+    }
+    // Fall through to env checks if not found at resourcesPath
+  }
+
+  // 2) SHARUN_DIR / APPDIR / OWD (AppImage)
+  for (const char* envName : {"SHARUN_DIR", "APPDIR", "OWD"}) {
+    if (const char* env = std::getenv(envName); env && *env) {
+      if (auto hit = try_path(env); !hit.empty()) return hit;
+      for (auto sub : {"bin", "shared/bin", "usr/bin"}) {
+        std::string base = std::string(env) + "/" + sub;
+        if (auto hit = try_path(base.c_str()); !hit.empty()) return hit;
+      }
+    }
+  }
+
+  // 3) XDG_DATA_DIRS
+  if (const char* xdg = std::getenv("XDG_DATA_DIRS"); xdg && *xdg) {
+    std::string dirs(xdg);
+    size_t start = 0;
+    while (start < dirs.size()) {
+      size_t end = dirs.find(':', start);
+      std::string one = dirs.substr(start, end == std::string::npos ? std::string::npos : end - start);
+      if (!one.empty()) {
+        if (auto hit = try_path((one + "/wiicompiled").c_str()); !hit.empty()) return hit;
+        if (auto hit = try_path(one.c_str()); !hit.empty()) return hit;
+      }
+      if (end == std::string::npos) break;
+      start = end + 1;
+    }
+  }
+
+  // 4) Fallback to bare filename (SDL will search via executable-adjacent + XDG)
   if (g_config.resourcesPath == nullptr || g_config.resourcesPath[0] == '\0') {
     return InitialPipelineCacheName;
   }
-
   std::string path{g_config.resourcesPath};
-  if (path.back() != '/' && path.back() != '\\') {
-    path += '/';
-  }
+  if (path.back() != '/' && path.back() != '\\') path += '/';
   path += InitialPipelineCacheName;
   return path;
 }

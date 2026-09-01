@@ -57,12 +57,59 @@ inline std::filesystem::path ManagedNandRootPath() {
 }
 
 inline std::optional<std::filesystem::path> BootstrapPayloadPath() {
+    auto check = [](const std::filesystem::path& dir) -> std::optional<std::filesystem::path> {
+        const auto adj = dir / "wii_bootstrap";
+        if (ExistingDirectory(adj / "shared2" / "wc24")) return adj;
+        const auto parent = dir.parent_path();
+        if (!parent.empty()) {
+            const auto up = parent / "wii_bootstrap";
+            if (ExistingDirectory(up / "shared2" / "wc24")) return up;
+            const auto share_bin = parent / "shared" / "bin" / "wii_bootstrap";
+            if (ExistingDirectory(share_bin / "shared2" / "wc24")) return share_bin;
+            const auto bin = parent / "bin" / "wii_bootstrap";
+            if (ExistingDirectory(bin / "shared2" / "wc24")) return bin;
+        }
+        return std::nullopt;
+    };
+
     if (auto executableDirectory = RuntimeConfigFile::ExecutableDirectory()) {
-        const auto adjacent = *executableDirectory / "wii_bootstrap";
-        if (ExistingDirectory(adjacent / "shared2" / "wc24")) {
-            return adjacent;
+        if (auto hit = check(*executableDirectory)) return hit;
+        const auto parent = executableDirectory->parent_path();
+        if (!parent.empty()) {
+            if (auto hit = check(parent)) return hit;
         }
     }
+
+    for (const char* envName : {"SHARUN_DIR", "APPDIR", "OWD"}) {
+        if (const char* env = std::getenv(envName); env && *env) {
+            std::filesystem::path base(env);
+            for (const auto& sub : {"", "bin", "shared/bin", "usr/bin"}) {
+                const auto cand = base / sub / "wii_bootstrap";
+                if (ExistingDirectory(cand / "shared2" / "wc24")) return cand;
+            }
+            const auto direct = base / "wii_bootstrap";
+            if (ExistingDirectory(direct / "shared2" / "wc24")) return direct;
+        }
+    }
+
+    if (const char* xdg = std::getenv("XDG_DATA_DIRS"); xdg && *xdg) {
+        std::string dirs(xdg);
+        size_t start = 0;
+        while (start < dirs.size()) {
+            size_t end = dirs.find(':', start);
+            std::string one = dirs.substr(start, end == std::string::npos ? std::string::npos : end - start);
+            if (!one.empty()) {
+                const auto cand = std::filesystem::path(one) / "wiicompiled" / "wii_bootstrap";
+                if (ExistingDirectory(cand / "shared2" / "wc24")) return cand;
+                const auto cand2 = std::filesystem::path(one) / "wii_bootstrap";
+                if (ExistingDirectory(cand2 / "shared2" / "wc24")) return cand2;
+            }
+            if (end == std::string::npos) break;
+            start = end + 1;
+        }
+    }
+    const auto usrShare = std::filesystem::path("/usr/share/wiicompiled/wii_bootstrap");
+    if (ExistingDirectory(usrShare / "shared2" / "wc24")) return usrShare;
 
     // This makes developer-tree launches work without changing their release layout.
     for (auto base = std::filesystem::current_path(); !base.empty();) {
