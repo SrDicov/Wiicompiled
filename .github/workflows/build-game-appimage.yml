@@ -109,9 +109,15 @@ jobs:
 
       - name: Smoke test AppImage
         run: |
-          ./Launcher/build-game-appimage.sh 2>&1 | tail -20 || true
-          # quick-sharun --test ya corrió dentro del script; test extra con --help si lo soporta
-          ./dist/WiiCompiled-glibc-*.AppImage --help 2>&1 | head -20 || true
+          set -eux
+          ls -lh dist/
+          # quick-sharun --test ya corrió dentro del script con xvfb; test extra sin FUSE (CI containers no tienen /dev/fuse)
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          timeout 12 ./dist/WiiCompiled-glibc-*.AppImage --help 2>&1 | head -30 || echo "help exit code $?"
+          if ./dist/WiiCompiled-glibc-*.AppImage --help 2>&1 | grep -qi "symbol lookup error\|error while loading shared libraries"; then
+            echo "::error::AppImage missing libs"; exit 1
+          fi
+          echo "smoke ok"
 
       - uses: actions/upload-artifact@v4
         with:

@@ -307,6 +307,9 @@ jobs:
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'nightly' }}
+          name: ${{ github.ref_type == 'tag' && github.ref_name || format('Wiicompiled nightly {0}', github.run_number) }}
+          target_commitish: ${{ github.sha }}
           files: |
             dist/WiiCompiled-glibc-generic-x86_64*
             dist/WiiCompiled-glibc-x86-64-v3*
@@ -317,7 +320,8 @@ jobs:
             dist/SHA256SUMS
           generate_release_notes: true
           draft: false
-          prerelease: false
+          prerelease: ${{ github.ref_type != 'tag' }}
           fail_on_unmatched_files: true
+          overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
