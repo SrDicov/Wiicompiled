@@ -56,6 +56,7 @@
 #include "runtime_log.h"
 #include "runtime_product.h"
 #include "recomp_mod_loader.h"
+#include "first_run_wizard.h"
 #include <aurora/aurora.h>
 #include <aurora/gfx.h>
 #include <dolphin/gx/GXAurora.h>
@@ -1388,6 +1389,42 @@ int RuntimeMain(int argc, char** argv) {
     try {
         if (argc != 1) {
             throw std::invalid_argument("The game runtime does not accept command-line options; use Config.toml through the installed host.");
+        }
+        // First-run portable + GameData wizard (creates portable.txt/UserData/GameData if needed, prompts for ISO)
+        {
+            // Ensure portable layout exists BEFORE any RuntimeConfigFile call that caches PortableRoot
+            try {
+                std::error_code pec;
+                if (auto exeDir = RuntimeConfigFile::ExecutableDirectory()) {
+                    // Direct filesystem check, not via cached PortableRootDirectory
+                    bool hasMarker = false;
+                    {
+                        std::filesystem::path cur = *exeDir;
+                        for (int lvl=0; lvl<=RuntimeConfigFile::kPortableSearchDepth; ++lvl) {
+                            if (std::filesystem::exists(cur / RuntimeConfigFile::kPortableMarkerFileName, pec)) { hasMarker=true; break; }
+                            auto parent = cur.parent_path(); if (parent.empty()||parent==cur) break; cur=parent;
+                        }
+                    }
+                    if (!hasMarker) {
+                        auto test = *exeDir / ".wii_writable_test";
+                        std::ofstream tf(test); bool writable = tf.good(); tf.close();
+                        if (writable) { std::filesystem::remove(test, pec); }
+                        if (writable && exeDir->string().find("/usr") != 0) {
+                            auto marker = *exeDir / RuntimeConfigFile::kPortableMarkerFileName;
+                            if (!std::filesystem::exists(marker, pec)) {
+                                std::filesystem::create_directories(*exeDir / RuntimeConfigFile::kPortableUserDataDirectoryName, pec);
+                                std::ofstream m(marker); if (m) m << "Portable WiiCompiled installation\n";
+                                std::cout << "[wizard] Created portable layout at " << *exeDir << std::endl;
+                            }
+                        }
+                    }
+                }
+            } catch(...) {}
+            if (!EnsureGameDataAvailable()) {
+                std::cerr << "[wizard] GameData setup was cancelled or failed. Exiting.\n";
+                ShowRuntimeFatalPopup("GameData missing", "No valid Mario Kart Wii GameData was configured and setup was cancelled.\n\nSet [paths] dvd_root in Config.toml to your extracted DATA folder or run again and select a valid ISO.");
+                return 1;
+            }
         }
         RuntimeConfigFile::LogLoadedConfig();
         SystemBridge::Initialize();

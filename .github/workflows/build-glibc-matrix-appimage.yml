@@ -1,4 +1,4 @@
-name: Build glibc matrix (generic / v3 / v4) + AnyLinux AppImages
+name: Build glibc generic + AnyLinux AppImage
 
 on:
   workflow_dispatch:
@@ -36,28 +36,12 @@ jobs:
         include:
           - variant: generic
             march: generic
-            march_flag: "-march=x86-64-v3"
-            bin_name: WiiCompiled-glibc-generic-x86_64
-            appimage_name: WiiCompiled-generic-anylinux-x86_64.AppImage
+            march_flag: "-march=x86-64"
+            bin_name: WiiCompiled-glibc-x86_64
+            appimage_name: WiiCompiled-anylinux-x86_64.AppImage
             hook: ""
             build_dir: build-generic
             out_dir: native-build-generic
-          - variant: x86-64-v3
-            march: x86-64-v3
-            march_flag: "-march=x86-64-v3"
-            bin_name: WiiCompiled-glibc-x86-64-v3
-            appimage_name: WiiCompiled-x86-64-v3-anylinux-x86_64.AppImage
-            hook: "x86-64-v3-check.hook"
-            build_dir: build-v3
-            out_dir: native-build-v3
-          - variant: x86-64-v4
-            march: x86-64-v4
-            march_flag: "-march=x86-64-v4"
-            bin_name: WiiCompiled-glibc-x86-64-v4
-            appimage_name: WiiCompiled-x86-64-v4-anylinux-x86_64.AppImage
-            hook: "x86-64-v4-check.hook"
-            build_dir: build-v4
-            out_dir: native-build-v4
 
     steps:
       - uses: actions/checkout@v4
@@ -264,7 +248,7 @@ jobs:
           retention-days: 7
 
   release:
-    name: Publish to Release (6 artifacts)
+    name: Publish to Release (2 artifacts - generic only)
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     needs: build-matrix
     runs-on: ubuntu-latest
@@ -276,16 +260,12 @@ jobs:
           path: ./artifacts
           merge-multiple: true
 
-      - name: Prepare release dir (6 files)
+      - name: Prepare release dir (2 files)
         run: |
           set -eux
           mkdir -p dist
-          # Artifacts from matrix are nested: artifacts/__w/Wiicompiled/Wiicompiled/dist/* and artifacts/tmp/*
-          # Use find to flatten correctly (merge-multiple:true keeps internal paths).
           find artifacts -type f \( -name "WiiCompiled*" -o -name "*.sha256" -o -name "*.zsync" \) -exec cp -v {} dist/ \; || true
-          # Also plain binaries without extension are named WiiCompiled-glibc-* (no .tar), ensure they are found
           find artifacts -type f -name "WiiCompiled-glibc-*" -exec cp -v {} dist/ \; || true
-          # Fallback: if find missed due to path, try direct dist
           if [ -d "artifacts/__w" ]; then
             find artifacts -path "*/dist/WiiCompiled*" -exec cp -v {} dist/ \; || true
           fi
@@ -293,11 +273,11 @@ jobs:
           echo "## Dist contents" >> /tmp/list.txt
           ls -lh dist/* 2>&1 | tee -a /tmp/list.txt || true
           find dist -type f | sort | tee -a /tmp/list.txt
-          # Must have 6 main files (3 tars + 3 AppImages) + sha256s
-          for f in WiiCompiled-glibc-generic-x86_64 WiiCompiled-glibc-x86-64-v3 WiiCompiled-glibc-x86-64-v4; do
+          # Must have 2 main files (1 tar + 1 AppImage) + sha256s - generic only for now (v3/v4 later)
+          for f in WiiCompiled-glibc-x86_64; do
             if ! ls dist/$f* 1>/dev/null 2>&1; then echo "::error::missing $f (found: $(ls dist/ | tr '\n' ' '))"; exit 1; fi
           done
-          for f in WiiCompiled-generic-anylinux-x86_64.AppImage WiiCompiled-x86-64-v3-anylinux-x86_64.AppImage WiiCompiled-x86-64-v4-anylinux-x86_64.AppImage; do
+          for f in WiiCompiled-anylinux-x86_64.AppImage; do
             if [ ! -f dist/$f ]; then echo "::error::missing AppImage $f (found: $(ls dist/ | tr '\n' ' '))"; exit 1; fi
           done
           sha256sum dist/WiiCompiled-* | tee dist/SHA256SUMS
@@ -311,12 +291,8 @@ jobs:
           name: ${{ github.ref_type == 'tag' && github.ref_name || format('Wiicompiled nightly {0}', github.run_number) }}
           target_commitish: ${{ github.sha }}
           files: |
-            dist/WiiCompiled-glibc-generic-x86_64*
-            dist/WiiCompiled-glibc-x86-64-v3*
-            dist/WiiCompiled-glibc-x86-64-v4*
-            dist/WiiCompiled-generic-anylinux-x86_64.AppImage*
-            dist/WiiCompiled-x86-64-v3-anylinux-x86_64.AppImage*
-            dist/WiiCompiled-x86-64-v4-anylinux-x86_64.AppImage*
+            dist/WiiCompiled-glibc-x86_64*
+            dist/WiiCompiled-anylinux-x86_64.AppImage*
             dist/SHA256SUMS
           generate_release_notes: true
           draft: false

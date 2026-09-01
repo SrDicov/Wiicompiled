@@ -194,25 +194,25 @@ std::array<PADButtonMapping, PAD_BUTTON_COUNT> g_defaultButtonsJoyPair{{
 }};
 
 std::array<PADKeyButtonBinding, PAD_BUTTON_COUNT> g_defaultKeys{{
-    {PAD_KEY_INVALID, PAD_BUTTON_A},
-    {PAD_KEY_INVALID, PAD_BUTTON_B},
+    {29, PAD_BUTTON_A},  // Z -> Accelerate (A)
+    {27, PAD_BUTTON_B},  // X -> Brake/Drift (B)
     {PAD_KEY_INVALID, PAD_BUTTON_X},
     {PAD_KEY_INVALID, PAD_BUTTON_Y},
-    {PAD_KEY_INVALID, PAD_BUTTON_START},
+    {44, PAD_BUTTON_START},  // Space -> Start/Pause
     {PAD_KEY_INVALID, PAD_TRIGGER_Z},
-    {PAD_KEY_INVALID, PAD_TRIGGER_L},
-    {PAD_KEY_INVALID, PAD_TRIGGER_R},
-    {PAD_KEY_INVALID, PAD_BUTTON_UP},
-    {PAD_KEY_INVALID, PAD_BUTTON_DOWN},
-    {PAD_KEY_INVALID, PAD_BUTTON_LEFT},
-    {PAD_KEY_INVALID, PAD_BUTTON_RIGHT},
+    {6, PAD_TRIGGER_L},   // C -> Item/Booster L
+    {25, PAD_TRIGGER_R},  // V -> Item/Booster R
+    {82, PAD_BUTTON_UP},     // Up -> Wheelie / Look back
+    {81, PAD_BUTTON_DOWN},   // Down -> Stop wheelie / Look back
+    {80, PAD_BUTTON_LEFT},   // Left -> Steer
+    {79, PAD_BUTTON_RIGHT},  // Right -> Steer
 }};
 
 std::array<PADKeyAxisBinding, PAD_AXIS_COUNT> g_defaultKeyAxis{{
-    {PAD_KEY_INVALID, PAD_AXIS_LEFT_X_POS, 0},
-    {PAD_KEY_INVALID, PAD_AXIS_LEFT_X_NEG, 0},
-    {PAD_KEY_INVALID, PAD_AXIS_LEFT_Y_POS, 0},
-    {PAD_KEY_INVALID, PAD_AXIS_LEFT_Y_NEG, 0},
+    {79, PAD_AXIS_LEFT_X_POS, 0},  // Right -> Stick X+
+    {80, PAD_AXIS_LEFT_X_NEG, 0},  // Left  -> Stick X-
+    {81, PAD_AXIS_LEFT_Y_POS, 0},  // Down  -> Stick Y+
+    {82, PAD_AXIS_LEFT_Y_NEG, 0},  // Up    -> Stick Y-
     {PAD_KEY_INVALID, PAD_AXIS_RIGHT_X_POS, 0},
     {PAD_KEY_INVALID, PAD_AXIS_RIGHT_X_NEG, 0},
     {PAD_KEY_INVALID, PAD_AXIS_RIGHT_Y_POS, 0},
@@ -315,10 +315,13 @@ BOOL PADInit() {
   }
   g_initialized = true;
 
-  std::ranges::for_each(g_keyboardBindings, [](auto& state) {
-    state.m_buttonMapping = g_defaultKeys;
-    state.m_axisMapping = g_defaultKeyAxis;
-  });
+  for (size_t i = 0; i < g_keyboardBindings.size(); ++i) {
+    g_keyboardBindings[i].m_buttonMapping = g_defaultKeys;
+    g_keyboardBindings[i].m_axisMapping = g_defaultKeyAxis;
+    // Port 0 keyboard active by default so Z/X/arrows work out of the box.
+    // Other ports stay inactive until user binds them; file load will override.
+    g_keyboardBindings[i].m_mappingsSet = (i == 0);
+  }
 
   return true;
 }
@@ -1244,7 +1247,7 @@ void PADClearKeyBindings(const u32 port) {
   }
   g_keyboardBindings[port].m_buttonMapping = g_defaultKeys;
   g_keyboardBindings[port].m_axisMapping = g_defaultKeyAxis;
-  g_keyboardBindings[port].m_mappingsSet = false;
+  g_keyboardBindings[port].m_mappingsSet = (port == 0);
 }
 
 constexpr uint32_t k_keyboardMagic = SBIG('KBND');

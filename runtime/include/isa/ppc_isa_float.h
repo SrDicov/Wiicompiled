@@ -607,7 +607,18 @@ inline double PPC_PsMulNoNiInline(double lhs, double rhs)
 inline PpcPairVec PpcFmaddPairInline(PpcPairVec multiplicand, PpcPairVec multiplier, PpcPairVec addend)
 {
 #if defined(__x86_64__)
+#if defined(__FMA__)
     return _mm_fmadd_ps(multiplicand, multiplier, addend);
+#else
+    // True generic fallback: emulate FMA with per-lane std::fma (single rounding),
+    // as generic -march=x86-64 has no FMA. Keeps bit-identical fused semantics.
+    alignas(16) float a[4], b[4], c[4], r[4];
+    _mm_store_ps(a, multiplicand);
+    _mm_store_ps(b, multiplier);
+    _mm_store_ps(c, addend);
+    for (int i = 0; i < 4; ++i) r[i] = std::fma(a[i], b[i], c[i]);
+    return _mm_load_ps(r);
+#endif
 #elif defined(__aarch64__)
     const PpcPairVec result = vfma_f32(addend, multiplicand, multiplier);
     if (PpcPairNanLaneBitsInline(result) != 0) [[unlikely]]
@@ -619,7 +630,16 @@ inline PpcPairVec PpcFmaddPairInline(PpcPairVec multiplicand, PpcPairVec multipl
 inline PpcPairVec PpcFmsubPairInline(PpcPairVec multiplicand, PpcPairVec multiplier, PpcPairVec subtractor)
 {
 #if defined(__x86_64__)
+#if defined(__FMA__)
     return _mm_fmsub_ps(multiplicand, multiplier, subtractor);
+#else
+    alignas(16) float a[4], b[4], c[4], r[4];
+    _mm_store_ps(a, multiplicand);
+    _mm_store_ps(b, multiplier);
+    _mm_store_ps(c, subtractor);
+    for (int i = 0; i < 4; ++i) r[i] = std::fma(a[i], b[i], -c[i]);
+    return _mm_load_ps(r);
+#endif
 #elif defined(__aarch64__)
     const PpcPairVec result = vfma_f32(vneg_f32(subtractor), multiplicand, multiplier);
     if (PpcPairNanLaneBitsInline(result) != 0) [[unlikely]]

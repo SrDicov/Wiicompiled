@@ -365,11 +365,11 @@ elseif(MKW_BASELINE_IS_V3)
     target_compile_definitions(mkw_cpu_baseline PRIVATE MKW_BASELINE_V3=1)
 endif()
 
-# Extra ultra tuning for v3/v4: enable LTO and native tuning where safe.
-# Generic stays at plain -march=x86-64 for max compat; v3/v4 get -O3 already via
-# mkw_apply_common_compile_options, plus we request interprocedural optimization
-# at configure time when available (fallback harmless if compiler lacks it).
-if(MKW_BASELINE_IS_V3 OR MKW_BASELINE_IS_V4)
+# Extra tuning: enable LTO where safe. Generic, v3 and v4 all get -O3 via
+# mkw_apply_common_compile_options; IPO is requested for all baselines when
+# available (fallback harmless if compiler lacks it). Keep generic build
+# maximised perf too.
+if(MKW_BASELINE_IS_GENERIC OR MKW_BASELINE_IS_V3 OR MKW_BASELINE_IS_V4)
     include(CheckIPOSupported)
     check_ipo_supported(RESULT _mkw_ipo_supported OUTPUT _mkw_ipo_err)
     if(_mkw_ipo_supported)

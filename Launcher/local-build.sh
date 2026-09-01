@@ -374,15 +374,13 @@ log_step configure-native "Configuring the native toolchain"
 # Use a recent tag known to exist and be compatible
 MUSL_DAWN_VERSION="v20260827.013930"
 # Baseline ISA override for matrix builds (generic / v3 / v4)
-# NOTE: True -march=x86-64 cannot build this runtime: ppc_isa_float.h uses _mm_fmadd_ps (FMA)
-# and _mm_shuffle_epi8 (SSSE3) which are unavailable without -mfma/-mssse3. Upstream hardcodes
-# v3. So "generic" is lowered to v3 (Haswell+ 2013, same as baseline). This is the most
-# "generic" this project can be without a runtime rewrite; the binary is named generic for
-# historical reasons but still needs AVX2. See host_cpu_baseline.cpp MKW_BASELINE_GENERIC.
+# Generic is true -march=x86-64 (SSE2 baseline, runs on any x86-64). FMA/SSSE3
+# fallbacks in ppc_isa_float.h / ppc_isa_quantized.h allow it to compile with
+# only SSE2. Keep v3/v4 available for later optimized variants.
 baseline_cmake_arg=()
 if [[ -n "$march_override" ]]; then
     case "$march_override" in
-        generic) baseline_flag="-march=x86-64-v3" ;;
+        generic) baseline_flag="-march=x86-64" ;;
         x86-64) baseline_flag="-march=x86-64" ;;
         x86-64-v2) baseline_flag="-march=x86-64-v2" ;;
         x86-64-v3) baseline_flag="-march=x86-64-v3" ;;

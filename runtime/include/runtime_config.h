@@ -88,6 +88,8 @@ struct RuntimeUserConfig {
     std::optional<int32_t> steeringSensitivity;
     std::optional<int32_t> acceleratorAxis;
     std::optional<int32_t> brakeAxis;
+    // Game language: en, ja, de, fr, es, it, nl, pt, ru, ko, zh, etc. "en" default, "auto" follows system.
+    std::optional<std::string> gameLanguage;
 };
 
 namespace RuntimeConfigFile {
@@ -186,6 +188,16 @@ inline std::string EffectiveDisplayMode(std::string value) {
 // migrated to 180 at the parse site.
 inline bool IsSupportedFrameInterpolationFps(uint32_t value) {
     return value == 0 || value == 120 || value == 180;
+}
+
+inline bool IsSupportedGameLanguage(std::string_view value) {
+    static constexpr std::array<std::string_view, 13> values{
+        "auto", "en", "ja", "de", "fr", "es", "it", "nl", "pt", "ru", "ko", "zh", "en2",
+    };
+    // normalize lowercase for check
+    std::string lower(value);
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c){ return std::tolower(c); });
+    return std::find(values.begin(), values.end(), lower) != values.end();
 }
 
 inline std::optional<std::filesystem::path> ExecutableDirectory() {
@@ -289,8 +301,11 @@ inline void EnsureConfigFile() {
         return;
     }
     output << "# WiiCompiled user configuration\n"
-              "# Set paths.dvd_root to an extracted Mario Kart Wii DATA directory.\n\n"
+              "# Set paths.dvd_root to an extracted Mario Kart Wii DATA directory.\n"
+              "# First run: if dvd_root is missing/empty, the game will prompt for your clean Mario Kart Wii ISO\n"
+              "# and extract the required GameData automatically.\n\n"
               "[video]\n"
+              "# Native performance defaults: 60 FPS, native resolution (1.0), accurate copy filter off for speed.\n"
               "widescreen = true\n"
               "resolution_multiplier = 1.0\n"
               "frame_interpolation_fps = 0\n"
@@ -298,7 +313,9 @@ inline void EnsureConfigFile() {
               "graphics_api = \"auto\"\n"
               "skip_unready_pipelines = true\n"
               "disable_copy_filter = true\n"
-              "show_fps = true\n"
+              "show_fps = false\n"
+              "# Performance: keep post-processing native (0) or set 0x10 to disable bloom for extra FPS.\n"
+              "# disabled_post_processing_paths = 0x10\n"
               "# Dolphin-style custom textures. When enabled, the renderer indexes\n"
               "# texture_replacements/ next to this file at startup and substitutes\n"
               "# any tex1_<W>x<H>_<hash>[_<tlut hash>]_<format>.dds or .png it finds\n"
@@ -322,11 +339,20 @@ inline void EnsureConfigFile() {
               "[controller]\n"
               "# Force feedback for every port. The game still asks for rumble;\n"
               "# this decides whether those requests reach the hardware.\n"
-              "rumble = true\n\n"
+              "rumble = true\n"
+              "# Keyboard defaults: Z=accelerate/A, X=brake/drift/B, arrows=steer, C/V=items (L/R), Space=start\n"
+              "# You can override per-button in this file or via the overlay (F10). Values are SDL scancodes.\n\n"
+              "[game]\n"
+              "# Game language. Requires restart to take effect.\n"
+              "# Available: en (English default), ja (Japanese), de (German), fr (French),\n"
+              "# es (Spanish), it (Italian), nl (Dutch), pt (Portuguese), ru (Russian),\n"
+              "# ko (Korean), zh (Chinese), auto (system)\n"
+              "language = \"en\"\n\n"
               "[network]\n"
               "enabled = true\n\n"
               "[paths]\n"
               "# dvd_root = \"D:\\\\MarioKartWii\\\\DATA\"\n"
+              "# dvd_root = \"./GameData\"  # portable: relative to this Config.toml\n"
               "# nand_root = \"D:\\\\WiiNand\"\n"
               "# retro_rewind_root = \"D:\\\\RetroRewind\\\\RetroRewind6\"\n"
               "# overlay_roots = [\"D:\\\\RetroRewind\"]\n";
@@ -486,6 +512,17 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.attenuateMusicWhenMediaPlays =
         FindConfigValue<bool>(document, "audio", "attenuate_music_when_media_plays");
     config.networkEnabled = FindConfigValue<bool>(document, "network", "enabled");
+
+    if (auto lang = FindConfigValue<std::string>(document, "game", "language")) {
+        std::string lower = *lang;
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c){ return std::tolower(c); });
+        lower = Trim(lower);
+        if (IsSupportedGameLanguage(lower)) {
+            config.gameLanguage = lower;
+        } else {
+            std::cerr << "[runtime] Unknown game.language=\"" << *lang << "\", using \"en\"" << std::endl;
+        }
+    }
 
     config.nandRoot = FindConfigValue<std::string>(document, "paths", "nand_root");
     config.dvdRoot = FindConfigValue<std::string>(document, "paths", "dvd_root");
@@ -990,6 +1027,19 @@ inline std::string DvdRoot(std::string fallback = "") {
     return Get().dvdRoot.value_or(std::move(fallback));
 }
 
+inline std::string GameLanguage(std::string fallback = "en") {
+    return Get().gameLanguage.value_or(std::move(fallback));
+}
+
+inline bool SetGameLanguage(std::string value) {
+    std::string lower = value;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c){ return std::tolower(c); });
+    lower = Trim(lower);
+    if (!IsSupportedGameLanguage(lower)) return false;
+    Mutable().gameLanguage = lower;
+    return WriteSetting("game", "language", FormatString(lower));
+}
+
 // The one resolver for configured paths. A relative value means the same thing
 // everywhere it can be configured: relative to the config file that named it,
 // never to the process working directory (docs/WHEELWIZARD_CONTRACT.md).
@@ -1072,6 +1122,9 @@ inline void LogLoadedConfig() {
             }
             if (config.networkEnabled) {
                 std::cout << " network_enabled=" << (*config.networkEnabled ? "true" : "false");
+            }
+            if (config.gameLanguage) {
+                std::cout << " language=" << *config.gameLanguage;
             }
             if (config.nandRoot) {
                 std::cout << " nand_root=" << *config.nandRoot;

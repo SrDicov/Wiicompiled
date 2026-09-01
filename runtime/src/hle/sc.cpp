@@ -101,6 +101,29 @@ extern "C" uint32_t SCGetProductGameRegion_HLE()
 
 PPC_NATIVE_OVERRIDE(801B24C8, SCGetProductGameRegion_HLE, uint32_t, (), ());
 
+// 0x801B1D0C -> SCGetLanguage()
+// Returns Wii SYSCONF language: 0=JA,1=EN,2=DE,3=FR,4=ES,5=IT,6=NL,7=ZH etc.
+// Configured via [game] language in Config.toml (requires restart).
+extern "C" uint32_t SCGetLanguage_HLE()
+{
+    const std::string lang = RuntimeConfigFile::GameLanguage("en");
+    if (lang == "ja" || lang == "jp") return 0;
+    if (lang == "en" || lang == "en2") return 1;
+    if (lang == "de") return 2;
+    if (lang == "fr") return 3;
+    if (lang == "es") return 4;
+    if (lang == "it") return 5;
+    if (lang == "nl") return 6;
+    if (lang == "pt") return 4; // Portuguese fallback to Spanish slot
+    if (lang == "ru") return 1; // no native slot, fallback EN
+    if (lang == "ko") return 1;
+    if (lang == "zh") return 1;
+    // auto or unknown: follow system region (EUR->EN)
+    return 1;
+}
+
+PPC_NATIVE_OVERRIDE(801B1D0C, SCGetLanguage_HLE, uint32_t, (), ());
+
 // These stubs make the game think all titles are installed; otherwise it checks title ID
 // 0x00010004524d4350 ("RMCP", Mario Kart Wii PAL) and reports error code 5.
 
