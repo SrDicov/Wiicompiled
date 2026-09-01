@@ -1395,28 +1395,52 @@ int RuntimeMain(int argc, char** argv) {
             // Ensure portable layout exists BEFORE any RuntimeConfigFile call that caches PortableRoot
             try {
                 std::error_code pec;
-                if (auto exeDir = RuntimeConfigFile::ExecutableDirectory()) {
-                    // Direct filesystem check, not via cached PortableRootDirectory
-                    bool hasMarker = false;
+                // Try AppImage dir first (portable AppImage should store data beside .AppImage)
+                auto tryCreatePortable = [&](std::filesystem::path dir){
+                    if (dir.empty()) return false;
+                    // Check already has marker upwards
                     {
-                        std::filesystem::path cur = *exeDir;
+                        std::filesystem::path cur = dir;
                         for (int lvl=0; lvl<=RuntimeConfigFile::kPortableSearchDepth; ++lvl) {
-                            if (std::filesystem::exists(cur / RuntimeConfigFile::kPortableMarkerFileName, pec)) { hasMarker=true; break; }
+                            if (std::filesystem::exists(cur / RuntimeConfigFile::kPortableMarkerFileName, pec)) return false;
                             auto parent = cur.parent_path(); if (parent.empty()||parent==cur) break; cur=parent;
                         }
                     }
-                    if (!hasMarker) {
-                        auto test = *exeDir / ".wii_writable_test";
-                        std::ofstream tf(test); bool writable = tf.good(); tf.close();
-                        if (writable) { std::filesystem::remove(test, pec); }
-                        if (writable && exeDir->string().find("/usr") != 0) {
-                            auto marker = *exeDir / RuntimeConfigFile::kPortableMarkerFileName;
-                            if (!std::filesystem::exists(marker, pec)) {
-                                std::filesystem::create_directories(*exeDir / RuntimeConfigFile::kPortableUserDataDirectoryName, pec);
-                                std::ofstream m(marker); if (m) m << "Portable WiiCompiled installation\n";
-                                std::cout << "[wizard] Created portable layout at " << *exeDir << std::endl;
-                            }
+                    auto test = dir / ".wii_writable_test";
+                    std::ofstream tf(test); bool writable = tf.good(); tf.close();
+                    if (writable) std::filesystem::remove(test, pec);
+                    if (writable && dir.string().find("/usr")!=0 && dir.string().find("/tmp")!=0) {
+                        auto marker = dir / RuntimeConfigFile::kPortableMarkerFileName;
+                        if (!std::filesystem::exists(marker, pec)) {
+                            std::filesystem::create_directories(dir / RuntimeConfigFile::kPortableUserDataDirectoryName, pec);
+                            std::ofstream m(marker); if (m) m << "Portable WiiCompiled installation\n";
+                            std::cout << "[wizard] Created portable layout at " << dir << std::endl;
+                            return true;
                         }
+                    }
+                    return false;
+                };
+                bool created = false;
+                if (const char* appimage = std::getenv("APPIMAGE"); appimage && *appimage) {
+                    std::filesystem::path p(appimage); std::error_code ec; if (std::filesystem::exists(p, ec)) created = tryCreatePortable(p.parent_path());
+                }
+                if (!created) {
+                    if (const char* owd = std::getenv("OWD"); owd && *owd) {
+                        created = tryCreatePortable(std::filesystem::path(owd));
+                    }
+                }
+                if (!created) {
+                    // Check current_path if it contains AppImage
+                    std::error_code ec; auto cur = std::filesystem::current_path(ec);
+                    if (!ec) {
+                        bool hasAppImage=false;
+                        for (auto &e: std::filesystem::directory_iterator(cur, ec)) if (e.path().extension()==".AppImage") {hasAppImage=true; break;}
+                        if (hasAppImage) created = tryCreatePortable(cur);
+                    }
+                }
+                if (!created) {
+                    if (auto exeDir = RuntimeConfigFile::ExecutableDirectory()) {
+                        tryCreatePortable(*exeDir);
                     }
                 }
             } catch(...) {}

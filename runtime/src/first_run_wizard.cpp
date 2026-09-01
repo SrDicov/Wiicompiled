@@ -28,10 +28,63 @@ bool IsDvdDataRootPath(const fs::path& p) {
     return fs::is_directory(p, ec) && fs::is_directory(p / "files", ec) && fs::is_regular_file(p / "sys" / "fst.bin", ec);
 }
 
+static std::optional<fs::path> GetAppImageDir() {
+    // For AppImage, portable data should be beside the .AppImage file, not the extracted exe.
+    if (const char* appimage = std::getenv("APPIMAGE"); appimage && *appimage) {
+        fs::path p(appimage);
+        std::error_code ec; if (fs::exists(p, ec)) return p.parent_path();
+    }
+    if (const char* owd = std::getenv("OWD"); owd && *owd) {
+        return fs::path(owd);
+    }
+    // Also check current working dir if it contains a .AppImage (common when double-clicking)
+    // Fallback to current_path as last resort for portable AppImage launches
+    return std::nullopt;
+}
+
 fs::path DefaultGameDataPath() {
     // Prefer portable location: <PortableRoot>/GameData if portable, else <AppData>/GameData
     if (auto root = RuntimeConfigFile::PortableRootDirectory()) {
         return *root / "GameData";
+    }
+    // Check AppImage dir first
+    if (auto appDir = GetAppImageDir()) {
+        std::error_code ec;
+        auto testFile = *appDir / ".wii_write_test";
+        std::ofstream t(testFile); bool writable = t.good(); t.close(); if (writable) fs::remove(testFile, ec);
+        if (writable) {
+            fs::create_directories(*appDir / RuntimeConfigFile::kPortableUserDataDirectoryName, ec);
+            auto marker = *appDir / RuntimeConfigFile::kPortableMarkerFileName;
+            if (!fs::exists(marker, ec)) {
+                std::ofstream m(marker); if (m) m << "Portable WiiCompiled installation\n";
+            }
+            return *appDir / "GameData";
+        }
+    }
+    // Also check current_path for portable (when AppImage launched from its directory)
+    {
+        std::error_code ec;
+        auto cur = fs::current_path(ec);
+        if (!ec) {
+            auto testFile = cur / ".wii_write_test";
+            std::ofstream t(testFile); bool writable = t.good(); t.close(); if (writable) fs::remove(testFile, ec);
+            // If cur contains AppImage or is writable and not /usr, treat as portable
+            bool hasAppImage = false;
+            for (auto &e : fs::directory_iterator(cur, ec)) {
+                if (e.path().extension() == ".AppImage") { hasAppImage=true; break; }
+            }
+            if (writable && (hasAppImage || cur.string().find("/tmp")!=0)) {
+                // Only create portable if we haven't already and cur is candidate
+                auto marker = cur / RuntimeConfigFile::kPortableMarkerFileName;
+                if (!fs::exists(marker, ec) && hasAppImage) {
+                    fs::create_directories(cur / RuntimeConfigFile::kPortableUserDataDirectoryName, ec);
+                    std::ofstream m(marker); if (m) m << "Portable WiiCompiled installation\n";
+                    return cur / "GameData";
+                } else if (fs::exists(marker, ec)) {
+                    return cur / "GameData";
+                }
+            }
+        }
     }
     // If exe dir is writable and no portable marker yet, we will create portable structure there
     // Check if we can create portable marker
@@ -40,7 +93,7 @@ fs::path DefaultGameDataPath() {
         // heuristic: if exeDir is not /usr/bin and writable, use portable GameData beside exe
         auto testFile = *exeDir / ".wii_write_test";
         std::ofstream t(testFile); bool writable = t.good(); t.close(); if (writable) fs::remove(testFile, ec);
-        if (writable && exeDir->string().find("/usr") != 0) {
+        if (writable && exeDir->string().find("/usr") != 0 && exeDir->string().find("/tmp") != 0) {
             // create portable structure
             fs::create_directories(*exeDir / RuntimeConfigFile::kPortableUserDataDirectoryName, ec);
             auto marker = *exeDir / RuntimeConfigFile::kPortableMarkerFileName;
