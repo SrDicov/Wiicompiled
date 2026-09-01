@@ -142,8 +142,15 @@ jobs:
         run: |
           set -eux
           mkdir -p dist
-          # Native clean tarball contains binary + runtime assets (dsp_coef, cache, bootstrap)
-          tar -cJf dist/${{ matrix.bin_name }}.tar.zst -C ./${{ matrix.out_dir }} WiiCompiled dsp_coef.bin initial_pipeline_cache.db wii_bootstrap 2>&1 | head -20 || \
+          # Bundle nodtool for wizard if not already present (for portable tarball extraction)
+          if [ ! -f ./${{ matrix.out_dir }}/nodtool ]; then
+            NOD_VERSION="v2.0.0-alpha.10"
+            wget -q "https://github.com/encounter/nod/releases/download/${NOD_VERSION}/nodtool-linux-x86_64" -O ./${{ matrix.out_dir }}/nodtool 2>&1 | head || echo "nodtool download for tarball skipped"
+            chmod +x ./${{ matrix.out_dir }}/nodtool 2>/dev/null || true
+          fi
+          # Native clean tarball contains binary + runtime assets (dsp_coef, cache, bootstrap) + nodtool for wizard
+          tar -cJf dist/${{ matrix.bin_name }}.tar.zst -C ./${{ matrix.out_dir }} WiiCompiled dsp_coef.bin initial_pipeline_cache.db wii_bootstrap nodtool 2>&1 | head -20 || \
+            tar -cJf dist/${{ matrix.bin_name }}.tar.zst -C ./${{ matrix.out_dir }} WiiCompiled dsp_coef.bin initial_pipeline_cache.db wii_bootstrap 2>&1 | head -20 || \
             tar -czf dist/${{ matrix.bin_name }}.tar.gz -C ./${{ matrix.out_dir }} WiiCompiled dsp_coef.bin initial_pipeline_cache.db wii_bootstrap
           # Provide both .tar.zst and fallback .tar.gz for compatibility - ensure at least one exists
           if [ -f dist/${{ matrix.bin_name }}.tar.zst ]; then
@@ -171,6 +178,14 @@ jobs:
           install -Dm644 ./${{ matrix.out_dir }}/dsp_coef.bin /usr/bin/dsp_coef.bin || true
           install -Dm644 ./${{ matrix.out_dir }}/initial_pipeline_cache.db /usr/bin/initial_pipeline_cache.db || true
           if [ -d ./${{ matrix.out_dir }}/wii_bootstrap ]; then cp -r ./${{ matrix.out_dir }}/wii_bootstrap /usr/bin/; fi
+          # Bundle nodtool for first-run wizard ISO extraction (auto-extract GameData)
+          NOD_VERSION="v2.0.0-alpha.10"
+          echo "Attempting to bundle nodtool ${NOD_VERSION} for wizard..."
+          if wget -q "https://github.com/encounter/nod/releases/download/${NOD_VERSION}/nodtool-linux-x86_64" -O /usr/bin/nodtool 2>&1 | head; then
+            chmod +x /usr/bin/nodtool && ls -lh /usr/bin/nodtool || true
+          else
+            echo "nodtool download failed, wizard will fallback to wit or manual instructions"
+          fi
           # 3. Desktop + icon (required by quick-sharun)
           mkdir -p /usr/share/applications /usr/share/icons/hicolor/256x256/apps
           cat > /usr/share/applications/wiicompiled.desktop <<'DESK'
@@ -217,9 +232,11 @@ jobs:
             [ -f /usr/bin/dsp_coef.bin ] && cp -v /usr/bin/dsp_coef.bin "$d"/ || true
             [ -f /usr/bin/initial_pipeline_cache.db ] && cp -v /usr/bin/initial_pipeline_cache.db "$d"/ || true
             [ -d /usr/bin/wii_bootstrap ] && cp -rv /usr/bin/wii_bootstrap "$d"/ || true
+            [ -f /usr/bin/nodtool ] && cp -v /usr/bin/nodtool "$d"/ || true
           done
           # Ensure binary also in AppDir for fallback (some runtimes check AppDir/WiiCompiled)
           cp -v /usr/bin/WiiCompiled AppDir/ 2>/dev/null || true
+          [ -f /usr/bin/nodtool ] && cp -v /usr/bin/nodtool AppDir/ 2>/dev/null || true
           ./quick-sharun --make-appimage
           ls -lh dist/*.AppImage
           sha256sum dist/*.AppImage | tee dist/${{ matrix.appimage_name }}.sha256
